@@ -53,10 +53,10 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
 
-      - name: Build kernels
+      - name: Build firecrackers
         run: sudo make build
 
-      - name: Upload kernels as artifact
+      - name: Upload firecrackers as artifact
         if: github.ref_name != 'main'
         uses: actions/upload-artifact@v4
         with:
@@ -64,7 +64,7 @@ jobs:
           path: ./builds
           retention-days: 7
 
-      - name: Upload kernels
+      - name: Upload firecrackers to GCS
         if: github.ref_name == 'main'
         uses: "google-github-actions/upload-cloud-storage@v1"
         with:
@@ -101,6 +101,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: Kernels ${{ steps.get-version.outputs.version }}
+          name: Firecrackers ${{ steps.get-version.outputs.version }}
           tag_name: ${{ steps.get-version.outputs.version }}
           files: "./release-assets/*"
