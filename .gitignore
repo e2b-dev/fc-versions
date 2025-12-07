@@ -1,2 +1,5 @@
-uilds/
-firecracker/
+builds/
+linux/
+.env
+.terraform
+.tfplan
