@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+FIRECRACKER_REPO_URL="https://github.com/e2b-dev/firecracker.git"
+
 function build_version {
   local version=$1
   echo "Starting build for Firecracker commit: $version"
@@ -22,7 +24,7 @@ function build_version {
 }
 
 echo "Cloning the Firecracker repository"
-git clone https://github.com/firecracker-microvm/firecracker.git firecracker
+git clone $FIRECRACKER_REPO_URL firecracker
 cd firecracker
 
 grep -v '^ *#' <../firecracker_versions.txt | while IFS= read -r version; do
