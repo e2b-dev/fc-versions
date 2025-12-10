@@ -43,7 +43,8 @@ function build_version {
   echo "Version name: $version_name"
 
   echo "Building Firecracker version: $version_name"
-  tools/devtool -y build --release
+  # Build only the firecracker binary, skip jailer and snapshot-editor for faster builds
+  tools/devtool -y build --release -- --bin firecracker
 
   echo "Copying finished build to builds directory"
   mkdir -p "../builds/${version_name}"
