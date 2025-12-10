@@ -34,32 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Set up Docker Buildx for better caching
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Cache Docker layers
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: docker-buildx-${{ runner.os }}-${{ matrix.version }}-${{ github.sha }}
-          restore-keys: |
-            docker-buildx-${{ runner.os }}-${{ matrix.version }}-
-            docker-buildx-${{ runner.os }}-
-
-      # Cache Cargo registry and git dependencies
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-${{ matrix.version }}-${{ github.sha }}
-          restore-keys: |
-            cargo-${{ runner.os }}-${{ matrix.version }}-
-            cargo-${{ runner.os }}-
-
       - name: Build Firecracker ${{ matrix.version }}
         run: ./build.sh "${{ matrix.version }}"
 
