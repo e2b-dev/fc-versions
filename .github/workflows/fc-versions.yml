@@ -2,14 +2,21 @@ name: FC Versions
 
 on:
   push:
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: write
 
 jobs:
+  # Run parallel builds via reusable workflow
+  build:
+    uses: ./.github/workflows/build.yml
+
+  # Collect artifacts and publish
   publish:
-    name: Build Firecracker and upload
+    name: Collect and upload builds
+    needs: build
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
@@ -47,22 +54,23 @@ jobs:
       - name: Test next version
         run: echo "Next version is ${{ steps.get-version.outputs.version }}"
 
+      # Download all build artifacts
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: builds
+          pattern: firecracker-*
+          merge-multiple: true
+
+      - name: List downloaded builds
+        run: find builds -type f | head -20
+
       - name: Setup Service Account
+        if: github.ref_name == 'main'
         uses: google-github-actions/auth@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-
-      - name: Build firecrackers
-        run: sudo make build
-
-      - name: Upload firecrackers as artifact
-        if: github.ref_name != 'main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: firecracker-${{ github.run_id }}
-          path: ./builds
-          retention-days: 7
 
       - name: Upload firecrackers to GCS
         if: github.ref_name == 'main'
@@ -82,7 +90,6 @@ jobs:
           git push origin ${{ steps.get-version.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
 
       - name: Prepare release assets
         if: github.ref_name == 'main'
