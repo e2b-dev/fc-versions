@@ -42,4 +42,4 @@ jobs:
         with:
           name: firecracker-${{ matrix.version }}
           path: builds/
-          retention-days: 30
+          retention-days: 7

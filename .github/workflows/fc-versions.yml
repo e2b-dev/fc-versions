@@ -89,3 +89,22 @@ jobs:
               --notes "Firecracker build: $version_name" \
               "$binary_path#${version_name}"
           done
+
+      - name: Generate build summary
+        run: |
+          echo "## 🔥 Firecracker Builds" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | Download |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          repo="${{ github.repository }}"
+          run_id="${{ github.run_id }}"
+          artifact_url="https://github.com/${repo}/actions/runs/${run_id}"
+
+          for dir in ./builds/*/; do
+            version_name=$(basename "$dir")
+            echo "| \`${version_name}\` | [firecracker](${artifact_url}) |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Built from commit: \`${{ github.sha }}\`_" >> $GITHUB_STEP_SUMMARY
