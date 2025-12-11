@@ -2,49 +2,27 @@ name: Build Firecracker Versions
 
 on:
   workflow_call:
-    outputs:
-      versions:
-        description: "JSON array of versions that were built"
-        value: ${{ jobs.prepare.outputs.versions }}
+    inputs:
+      version:
+        required: true
+        type: string
+      hash:
+        required: true
+        type: string
+      version_name:
+        required: true
+        type: string
   workflow_dispatch:
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.set-versions.outputs.versions }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Parse versions from file
-        id: set-versions
-        run: |
-          versions=$(./scripts/parse-versions.sh firecracker_versions.txt)
-          echo "versions=$versions" >> $GITHUB_OUTPUT
-          echo "Building versions: $versions"
-
   build:
-    needs: prepare
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        version: ${{ fromJson(needs.prepare.outputs.versions) }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build Firecracker ${{ matrix.version }}
-        id: build
-        run: |
-          ./build.sh "${{ matrix.version }}"
-          # Read the computed version name (with hash) - format is "version_name:commit_hash"
-          version_info=$(cat built_versions.txt | tail -1)
-          version_name=$(echo "$version_info" | cut -d: -f1)
-          echo "version_name=$version_name" >> $GITHUB_OUTPUT
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Build Firecracker ${{ inputs.version_name }}
+        run: ./build.sh "${{ inputs.version }}" "${{ inputs.hash }}" "${{ inputs.version_name }}"
+      - uses: actions/upload-artifact@v4
         with:
-          name: firecracker-${{ steps.build.outputs.version_name }}
+          name: firecracker-${{ inputs.version_name }}
           path: builds/
           retention-days: 7

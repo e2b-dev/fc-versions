@@ -1,5 +1,4 @@
 #!/bin/bash
-# Parse versions from firecracker_versions.txt and output as JSON array
 
 set -euo pipefail
 
@@ -10,5 +9,4 @@ if [[ ! -f "$VERSIONS_FILE" ]]; then
   exit 1
 fi
 
-# Read versions, skip comments and empty lines, output as JSON array
 grep -v '^ *#' "$VERSIONS_FILE" | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))'
