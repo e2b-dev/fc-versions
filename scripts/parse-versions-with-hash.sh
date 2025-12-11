@@ -16,8 +16,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 git clone --bare "$FIRECRACKER_REPO_URL" "$TEMP_DIR/fc-repo" 2>/dev/null
 cd "$TEMP_DIR/fc-repo"
 
-versions_json="["
-first=true
+versions=()
 
 while IFS= read -r version || [[ -n "$version" ]]; do
   [[ "$version" =~ ^[[:space:]]*# ]] && continue
@@ -52,12 +51,11 @@ while IFS= read -r version || [[ -n "$version" ]]; do
     fi
   fi
   
-  [[ "$first" == "true" ]] && first=false || versions_json+=","
-  versions_json+=$(jq -n \
+  versions+=("$(jq -n \
     --arg version "$version" \
     --arg hash "$fullhash" \
     --arg version_name "$version_name" \
-    '{version: $version, hash: $hash, version_name: $version_name}')
+    '{version: $version, hash: $hash, version_name: $version_name}')")
 done < "$OLDPWD/$VERSIONS_FILE"
 
-echo "${versions_json}]"
+printf '%s\n' "${versions[@]}" | jq -s -c '.'
