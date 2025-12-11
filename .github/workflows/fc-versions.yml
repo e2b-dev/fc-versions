@@ -46,10 +46,9 @@ jobs:
           pattern: version-info-*
           merge-multiple: true
 
-      # Check CI status for all commits before publishing
+      # Check CI status for all commits (runs on all branches for visibility)
       - name: Check CI status for all versions
         id: ci-check
-        if: github.ref_name == 'main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
