@@ -17,11 +17,9 @@ This project automates the building of custom Firecracker. It supports building 
 
    ```sh
    make build
-   # or directly
-   ./build.sh
    ```
 
-   The built firecrackers will be placed in `builds/firecracker-<version>/firecracker`.
+   The built firecrackers will be placed in `builds/<version_name>/firecracker`.
 
 ## Development Workflow
 
