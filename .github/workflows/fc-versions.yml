@@ -38,15 +38,77 @@ jobs:
       - name: List downloaded builds
         run: find builds -type f | head -20
 
-      - name: Setup Service Account
+      # Download version info to get commit hashes
+      - name: Download version info
+        uses: actions/download-artifact@v4
+        with:
+          path: version-info
+          pattern: version-info-*
+          merge-multiple: true
+
+      # Check CI status for all commits before publishing
+      - name: Check CI status for all versions
+        id: ci-check
         if: github.ref_name == 'main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FIRECRACKER_REPO="e2b-dev/firecracker"
+          all_passed=true
+          failed_versions=""
+
+          # Read all version:hash pairs
+          for line in $(cat version-info/built_versions.txt 2>/dev/null || echo ""); do
+            version_name=$(echo "$line" | cut -d: -f1)
+            commit_hash=$(echo "$line" | cut -d: -f2)
+            
+            echo "Checking CI for $version_name (commit: $commit_hash)..."
+            
+            # Check combined commit status
+            status=$(gh api "/repos/${FIRECRACKER_REPO}/commits/${commit_hash}/status" --jq '.state' 2>/dev/null || echo "unknown")
+            
+            # Check check-runs (GitHub Actions)
+            check_conclusion=$(gh api "/repos/${FIRECRACKER_REPO}/commits/${commit_hash}/check-runs" --jq '
+              if .total_count == 0 then "no_checks"
+              elif ([.check_runs[].conclusion] | all(. == "success" or . == "skipped" or . == null)) then "success"
+              elif ([.check_runs[].status] | any(. == "in_progress" or . == "queued")) then "pending"
+              else "failure"
+              end
+            ' 2>/dev/null || echo "unknown")
+            
+            echo "  Status: $status, Check runs: $check_conclusion"
+            
+            if [[ "$status" == "failure" ]] || [[ "$check_conclusion" == "failure" ]]; then
+              echo "  ❌ CI failed for $version_name"
+              all_passed=false
+              failed_versions="${failed_versions}${version_name} "
+            elif [[ "$status" == "pending" ]] || [[ "$check_conclusion" == "pending" ]]; then
+              echo "  ⏳ CI still running for $version_name"
+              all_passed=false
+              failed_versions="${failed_versions}${version_name}(pending) "
+            else
+              echo "  ✅ CI passed for $version_name"
+            fi
+          done
+
+          if [[ "$all_passed" == "true" ]]; then
+            echo "All CI checks passed!"
+            echo "ci_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "CI checks failed or pending for: $failed_versions"
+            echo "ci_passed=false" >> $GITHUB_OUTPUT
+            echo "Skipping GCS upload and release creation."
+          fi
+
+      - name: Setup Service Account
+        if: github.ref_name == 'main' && steps.ci-check.outputs.ci_passed == 'true'
         uses: google-github-actions/auth@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
 
       - name: Upload firecrackers to GCS
-        if: github.ref_name == 'main'
+        if: github.ref_name == 'main' && steps.ci-check.outputs.ci_passed == 'true'
         uses: "google-github-actions/upload-cloud-storage@v1"
         with:
           path: "./builds"
@@ -55,7 +117,7 @@ jobs:
           parent: false
 
       - name: Create releases for each Firecracker version
-        if: github.ref_name == 'main'
+        if: github.ref_name == 'main' && steps.ci-check.outputs.ci_passed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

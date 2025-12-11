@@ -36,8 +36,10 @@ function build_version {
     echo "Starting build for Firecracker at commit: $version"
     echo "Checking out repo for Firecracker at commit: $version"
     git checkout "${version}"
+    
+    fullhash=$(git rev-parse HEAD)
     # The format will be: latest_tag_latest_commit_hash — v1.7.0-dev_g8bb88311
-    version_name=$(git describe --tags --abbrev=0 "$(git rev-parse HEAD)")_$(git rev-parse --short HEAD)
+    version_name=$(git describe --tags --abbrev=0 "$fullhash")_$(git rev-parse --short HEAD)
   fi
 
   echo "Version name: $version_name"
@@ -50,8 +52,8 @@ function build_version {
   mkdir -p "../builds/${version_name}"
   cp build/cargo_target/x86_64-unknown-linux-musl/release/firecracker "../builds/${version_name}/firecracker"
   
-  # Write version name to file for CI to use
-  echo "$version_name" >> ../built_versions.txt
+  # Write version name and commit hash to file for CI to use
+  echo "${version_name}:${fullhash}" >> ../built_versions.txt
 }
 
 # If a version is passed as argument, build only that version

@@ -38,8 +38,9 @@ jobs:
         id: build
         run: |
           ./build.sh "${{ matrix.version }}"
-          # Read the computed version name (with hash)
-          version_name=$(cat built_versions.txt | tail -1)
+          # Read the computed version name (with hash) - format is "version_name:commit_hash"
+          version_info=$(cat built_versions.txt | tail -1)
+          version_name=$(echo "$version_info" | cut -d: -f1)
           echo "version_name=$version_name" >> $GITHUB_OUTPUT
 
       - name: Upload build artifact
@@ -47,4 +48,11 @@ jobs:
         with:
           name: firecracker-${{ steps.build.outputs.version_name }}
           path: builds/
+          retention-days: 7
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-info-${{ steps.build.outputs.version_name }}
+          path: built_versions.txt
           retention-days: 7
