@@ -3,3 +3,4 @@ linux/
 .env
 .terraform
 .tfplan
+.env
