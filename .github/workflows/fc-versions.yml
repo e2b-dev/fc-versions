@@ -2,67 +2,48 @@ name: FC Versions
 
 on:
   push:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   id-token: write
   contents: write
 
 jobs:
+  # Run parallel builds via reusable workflow
+  build:
+    uses: ./.github/workflows/build.yml
+
   publish:
-    name: Build Firecracker and upload
+    name: Collect and upload builds
+    needs: build
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - uses: actions/create-github-app-token@v1
-        id: app-token
         with:
-          app-id: ${{ vars.VERSION_BUMPER_APPID }}
-          private-key: ${{ secrets.VERSION_BUMPER_SECRET }}
+          fetch-depth: 0
 
-      - name: Get the last release
-        id: last_release
-        continue-on-error: true
-        uses: cardinalby/git-get-release-action@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      # Download all build artifacts
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
         with:
-          latest: true
-          prerelease: false
-          draft: false
+          path: builds
+          pattern: firecracker-*
+          merge-multiple: true
 
-      - name: Get next version
-        id: get-version
-        run: |
-          if [ "${{ steps.last_release.outputs.tag_name }}" == "" ]; then
-            echo "No previous release found, starting with v0.0.1"
-            echo "version=v0.0.1" >> $GITHUB_OUTPUT
-          else
-            version=${{ steps.last_release.outputs.tag_name }}
-            result=$(echo ${version} | awk -F. -v OFS=. '{$NF += 1 ; print}')
-            echo "version=$result" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Test next version
-        run: echo "Next version is ${{ steps.get-version.outputs.version }}"
+      - name: List downloaded builds
+        run: find builds -type f | head -20
 
       - name: Setup Service Account
+        if: github.ref_name == 'main'
         uses: google-github-actions/auth@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-
-      - name: Build firecrackers
-        run: sudo make build
-
-      - name: Upload firecrackers as artifact
-        if: github.ref_name != 'main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: firecracker-${{ github.run_id }}
-          path: ./builds
-          retention-days: 7
 
       - name: Upload firecrackers to GCS
         if: github.ref_name == 'main'
@@ -73,34 +54,41 @@ jobs:
           gzip: false
           parent: false
 
-      - name: Create Git tag
+      - name: Create releases for each Firecracker version
         if: github.ref_name == 'main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git tag ${{ steps.get-version.outputs.version }}
-          git push origin ${{ steps.get-version.outputs.version }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-
-      - name: Prepare release assets
-        if: github.ref_name == 'main'
-        run: |
-          mkdir -p release-assets
           for dir in ./builds/*/; do
-            name=$(basename "$dir")
-            cp "$dir/vmlinux.bin" "release-assets/${name}.bin"
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            version_name=$(basename "$dir")
+            binary_path="$dir/firecracker"
 
-      - name: Upload Release Asset
-        if: github.ref_name == 'main'
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          name: Firecrackers ${{ steps.get-version.outputs.version }}
-          tag_name: ${{ steps.get-version.outputs.version }}
-          files: "./release-assets/*"
+            echo "Processing $version_name..."
+
+            # Check if tag already exists
+            if git rev-parse "refs/tags/$version_name" >/dev/null 2>&1; then
+              echo "Tag $version_name already exists, skipping..."
+              continue
+            fi
+
+            # Check if release already exists
+            if gh release view "$version_name" >/dev/null 2>&1; then
+              echo "Release $version_name already exists, skipping..."
+              continue
+            fi
+
+            echo "Creating tag and release for $version_name..."
+
+            # Create and push tag
+            git tag "$version_name"
+            git push origin "$version_name"
+
+            # Create release with the binary
+            gh release create "$version_name" \
+              --title "Firecracker $version_name" \
+              --notes "Firecracker build: $version_name" \
+              "$binary_path#${version_name}"
+          done
