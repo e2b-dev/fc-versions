@@ -2,44 +2,27 @@ name: Build Firecracker Versions
 
 on:
   workflow_call:
-    outputs:
-      versions:
-        description: "JSON array of versions that were built"
-        value: ${{ jobs.prepare.outputs.versions }}
+    inputs:
+      version:
+        required: true
+        type: string
+      hash:
+        required: true
+        type: string
+      version_name:
+        required: true
+        type: string
   workflow_dispatch:
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      versions: ${{ steps.set-versions.outputs.versions }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Parse versions from file
-        id: set-versions
-        run: |
-          # Read versions, skip comments and empty lines, output as JSON array
-          versions=$(grep -v '^ *#' firecracker_versions.txt | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          echo "versions=$versions" >> $GITHUB_OUTPUT
-          echo "Building versions: $versions"
-
   build:
-    needs: prepare
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        version: ${{ fromJson(needs.prepare.outputs.versions) }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Build Firecracker ${{ matrix.version }}
-        run: ./build.sh "${{ matrix.version }}"
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Build Firecracker ${{ inputs.version_name }}
+        run: ./build.sh "${{ inputs.version }}" "${{ inputs.hash }}" "${{ inputs.version_name }}"
+      - uses: actions/upload-artifact@v4
         with:
-          name: firecracker-${{ matrix.version }}
+          name: firecracker-${{ inputs.version_name }}
           path: builds/
           retention-days: 7
