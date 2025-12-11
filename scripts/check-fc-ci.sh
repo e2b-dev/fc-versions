@@ -2,50 +2,19 @@
 
 set -euo pipefail
 
-VERSIONS_FILE="${1:-firecracker_versions.txt}"
-FIRECRACKER_REPO_URL="https://github.com/e2b-dev/firecracker.git"
 FIRECRACKER_REPO_API="e2b-dev/firecracker"
 
-if [[ ! -f "$VERSIONS_FILE" ]]; then
-  echo "Error: $VERSIONS_FILE not found" >&2
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <versions_json>" >&2
   exit 1
 fi
 
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
-
-git clone --bare "$FIRECRACKER_REPO_URL" "$TEMP_DIR/fc-repo" 2>/dev/null
-cd "$TEMP_DIR/fc-repo"
+versions_json="$1"
 
 all_passed=true
 failed_versions=""
 
-while IFS= read -r version || [[ -n "$version" ]]; do
-  [[ "$version" =~ ^[[:space:]]*# ]] && continue
-  [[ -z "$version" ]] && continue
-  
-  if [[ "$version" =~ ^([^_]+)_([0-9a-fA-F]+)$ ]]; then
-    tag="${BASH_REMATCH[1]}"
-    shorthash="${BASH_REMATCH[2]}"
-    commit_hash=$(git rev-parse --verify "$shorthash^{commit}" 2>/dev/null || echo "")
-    version_name="${tag}_${shorthash}"
-  else
-    commit_hash=$(git rev-parse --verify "${version}^{commit}" 2>/dev/null || echo "")
-    if [[ -n "$commit_hash" ]]; then
-      short_hash=$(git rev-parse --short "$commit_hash")
-      version_name="${version}_${short_hash}"
-    else
-      version_name="$version"
-    fi
-  fi
-  
-  if [[ -z "$commit_hash" ]]; then
-    echo "  ❌ Could not resolve commit for $version"
-    all_passed=false
-    failed_versions="${failed_versions}${version}(unresolved) "
-    continue
-  fi
-  
+while IFS='|' read -r version commit_hash version_name; do
   status_response=$(gh api "/repos/${FIRECRACKER_REPO_API}/commits/${commit_hash}/status" 2>/dev/null || echo '{"state":"unknown","total_count":0}')
   status=$(echo "$status_response" | jq -r '.state')
   status_count=$(echo "$status_response" | jq -r '.total_count')
@@ -84,7 +53,7 @@ while IFS= read -r version || [[ -n "$version" ]]; do
     all_passed=false
     failed_versions="${failed_versions}${version_name}(unexpected) "
   fi
-done < "$OLDPWD/$VERSIONS_FILE"
+done < <(echo "$versions_json" | jq -r '.[] | "\(.version)|\(.hash)|\(.version_name)"')
 
 echo ""
 [[ "$all_passed" == "true" ]] && echo "ci_passed=true" || echo "ci_passed=false"

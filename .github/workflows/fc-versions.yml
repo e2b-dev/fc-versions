@@ -38,6 +38,7 @@ jobs:
       version_name: ${{ matrix.version_name }}
 
   check-ci:
+    needs: prepare
     runs-on: ubuntu-latest
     outputs:
       ci_passed: ${{ steps.ci-check.outputs.ci_passed }}
@@ -48,7 +49,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          output=$(./scripts/check-fc-ci.sh firecracker_versions.txt)
+          output=$(./scripts/check-fc-ci.sh '${{ needs.prepare.outputs.matrix }}')
           echo "$output"
           ci_passed=$(echo "$output" | grep "^ci_passed=" | cut -d= -f2)
           echo "ci_passed=$ci_passed" >> $GITHUB_OUTPUT
