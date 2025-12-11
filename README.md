@@ -7,26 +7,10 @@ This project automates the building of custom Firecracker versions. It supports 
 ## Prerequisites
 
 - Linux environment (for building firecracker)
-- Git repository with tags
 
 ## Building Firecrackers
 
-### Local Build
-
-Build the current git version (latest tag in repository + current commit hash):
-
-```sh
-make build
-```
-
-**Requirements:**
-- The repository must be in a clean state (no uncommitted changes)
-- The repository must have at least one tag
-- The built firecracker will be placed in `builds/<latest_tag>_<current_commit_shorthash>/firecracker`
-
-### CI/CD Build
-
-The `firecracker_versions.txt` file specifies which versions to build in CI/CD:
+The `firecracker_versions.txt` file specifies which versions to build:
 
 - Edit `firecracker_versions.txt` to specify firecracker versions (one per line)
 - Versions can be tags (e.g., `v1.10.1`) or tag with shorthash (e.g., `v1.12.1_abcdef12`)
