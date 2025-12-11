@@ -19,8 +19,7 @@ jobs:
       - name: Parse versions from file
         id: set-versions
         run: |
-          # Read versions, skip comments and empty lines, output as JSON array
-          versions=$(grep -v '^ *#' firecracker_versions.txt | grep -v '^$' | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          versions=$(./scripts/parse-versions.sh firecracker_versions.txt)
           echo "versions=$versions" >> $GITHUB_OUTPUT
           echo "Building versions: $versions"
 
@@ -48,11 +47,4 @@ jobs:
         with:
           name: firecracker-${{ steps.build.outputs.version_name }}
           path: builds/
-          retention-days: 7
-
-      - name: Upload version info
-        uses: actions/upload-artifact@v4
-        with:
-          name: version-info-${{ steps.build.outputs.version_name }}
-          path: built_versions.txt
           retention-days: 7
