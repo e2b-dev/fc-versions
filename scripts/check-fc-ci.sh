@@ -51,7 +51,9 @@ while IFS= read -r version || [[ -n "$version" ]]; do
   fi
   
   if [[ -z "$commit_hash" ]]; then
-    echo "  ⚠️ Could not resolve commit for $version"
+    echo "  ❌ Could not resolve commit for $version"
+    all_passed=false
+    failed_versions="${failed_versions}${version}(unresolved) "
     continue
   fi
   
