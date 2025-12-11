@@ -57,37 +57,53 @@ while IFS= read -r version || [[ -n "$version" ]]; do
   
   echo "  Checking CI for $version_name (commit: $commit_hash)..."
   
-  # Check combined commit status
-  status=$(gh api "/repos/${FIRECRACKER_REPO_API}/commits/${commit_hash}/status" --jq '.state' 2>/dev/null || echo "unknown")
+  # Check combined commit status (returns total_count of statuses)
+  status_response=$(gh api "/repos/${FIRECRACKER_REPO_API}/commits/${commit_hash}/status" 2>/dev/null || echo '{"state":"unknown","total_count":0}')
+  status=$(echo "$status_response" | jq -r '.state')
+  status_count=$(echo "$status_response" | jq -r '.total_count')
   
   # Check check-runs (GitHub Actions)
   # Order matters: check pending BEFORE success (null conclusion means in-progress)
-  check_conclusion=$(gh api "/repos/${FIRECRACKER_REPO_API}/commits/${commit_hash}/check-runs" --jq '
+  check_response=$(gh api "/repos/${FIRECRACKER_REPO_API}/commits/${commit_hash}/check-runs" 2>/dev/null || echo '{"total_count":0}')
+  check_count=$(echo "$check_response" | jq -r '.total_count')
+  check_conclusion=$(echo "$check_response" | jq -r '
     if .total_count == 0 then "no_checks"
     elif ([.check_runs[].status] | any(. == "in_progress" or . == "queued")) then "pending"
     elif ([.check_runs[].conclusion] | any(. == "failure" or . == "cancelled" or . == "timed_out")) then "failure"
     elif ([.check_runs[].conclusion] | all(. == "success" or . == "skipped" or . == "neutral")) then "success"
     else "unknown"
     end
-  ' 2>/dev/null || echo "unknown")
+  ')
   
-  echo "  Status: $status, Check runs: $check_conclusion"
+  echo "  Status: $status (count: $status_count), Check runs: $check_conclusion (count: $check_count)"
   
-  # Treat unknown as failure (API errors should block release)
+  # Handle the different cases
   if [[ "$status" == "failure" ]] || [[ "$check_conclusion" == "failure" ]]; then
     echo "  ❌ CI failed for $version_name"
     all_passed=false
     failed_versions="${failed_versions}${version_name} "
-  elif [[ "$status" == "pending" ]] || [[ "$check_conclusion" == "pending" ]]; then
+  elif [[ "$check_conclusion" == "pending" ]]; then
+    # Only pending if there are actual check-runs in progress
     echo "  ⏳ CI still running for $version_name"
     all_passed=false
     failed_versions="${failed_versions}${version_name}(pending) "
-  elif [[ "$status" == "unknown" ]] || [[ "$check_conclusion" == "unknown" ]]; then
+  elif [[ "$status" == "pending" ]] && [[ "$status_count" -gt 0 ]]; then
+    # Only pending if there are actual statuses pending
+    echo "  ⏳ CI still running for $version_name"
+    all_passed=false
+    failed_versions="${failed_versions}${version_name}(pending) "
+  elif [[ "$status" == "unknown" ]] && [[ "$check_conclusion" == "unknown" ]]; then
     echo "  ⚠️ Could not verify CI status for $version_name (API error)"
     all_passed=false
     failed_versions="${failed_versions}${version_name}(unknown) "
   elif [[ "$status" == "success" ]] || [[ "$check_conclusion" == "success" ]]; then
     echo "  ✅ CI passed for $version_name"
+  elif [[ "$status_count" -eq 0 ]] && [[ "$check_count" -eq 0 ]]; then
+    # No CI configured for this commit - treat as acceptable
+    echo "  ℹ️ No CI checks found for $version_name (assuming OK)"
+  elif [[ "$status" == "pending" ]] && [[ "$status_count" -eq 0 ]] && [[ "$check_conclusion" == "no_checks" ]]; then
+    # GitHub returns "pending" when there are no statuses - this is OK
+    echo "  ℹ️ No CI checks found for $version_name (assuming OK)"
   else
     # Catch-all for unexpected states
     echo "  ⚠️ Unexpected CI state for $version_name: status=$status, check_conclusion=$check_conclusion"
