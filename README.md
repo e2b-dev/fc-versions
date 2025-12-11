@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project automates the building of custom Firecracker. It supports building specific firecracker versions and uploading the resulting binaries to a Google Cloud Storage (GCS) bucket.
+This project automates the building of custom Firecracker versions. It supports building specific firecracker versions and uploading the resulting binaries to a Google Cloud Storage (GCS) bucket.
 
 ## Prerequisites
 
@@ -10,20 +10,21 @@ This project automates the building of custom Firecracker. It supports building 
 
 ## Building Firecrackers
 
-1. **Configure firecracker versions:**
-    - Edit `firecracker_versions.txt` to specify which firecracker versions to build (one per line, e.g., `<last_tag-prelease>-<first-8-letters-of-the-specific-commit>`).
+The `firecracker_versions.txt` file specifies which versions to build:
 
-2. **Build:**
+- Edit `firecracker_versions.txt` to specify firecracker versions (one per line)
+- Versions can be tags (e.g., `v1.10.1`) or tag with shorthash (e.g., `v1.12.1_abcdef12`)
+- On every push, GitHub Actions will automatically:
+  1. Parse versions from `firecracker_versions.txt` and resolve commit hashes
+  2. Build each version in parallel
+  3. Check CI status for each version
+  4. Upload successful builds to GCS and create GitHub releases (on main branch)
 
-   ```sh
-   make build
-   ```
+## Scripts
 
-   The built firecrackers will be placed in `builds/<version_name>/firecracker`.
-
-## Development Workflow
-
-- On every push, GitHub Actions will automatically build the firecrackers and save it as an artifact.
+- `build.sh <version> <hash> <version_name>` - Builds a single Firecracker version
+- `scripts/parse-versions-with-hash.sh` - Parses versions and resolves commit hashes
+- `scripts/check-fc-ci.sh <versions_json>` - Checks CI status for parsed versions
 
 ## License
 
