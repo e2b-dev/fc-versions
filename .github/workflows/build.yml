@@ -35,11 +35,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Firecracker ${{ matrix.version }}
-        run: ./build.sh "${{ matrix.version }}"
+        id: build
+        run: |
+          ./build.sh "${{ matrix.version }}"
+          # Read the computed version name (with hash)
+          version_name=$(cat built_versions.txt | tail -1)
+          echo "version_name=$version_name" >> $GITHUB_OUTPUT
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firecracker-${{ matrix.version }}
+          name: firecracker-${{ steps.build.outputs.version_name }}
           path: builds/
           retention-days: 7
