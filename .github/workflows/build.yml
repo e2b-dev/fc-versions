@@ -28,7 +28,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         version: ${{ fromJson(needs.prepare.outputs.versions) }}
     steps:
