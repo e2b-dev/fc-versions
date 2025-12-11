@@ -8,9 +8,9 @@ build:
 		exit 1; \
 	fi
 	@hash=$$(git rev-parse HEAD); \
-	tag=$$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo ""); \
+	tag=$$(git tag --sort=-version:refname | head -1); \
 	if [ -z "$$tag" ]; then \
-		echo "Error: No tag found for current commit" >&2; \
+		echo "Error: No tags found in repository" >&2; \
 		exit 1; \
 	fi; \
 	short_hash=$$(git rev-parse --short HEAD); \

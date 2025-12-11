@@ -13,7 +13,7 @@ This project automates the building of custom Firecracker versions. It supports 
 
 ### Local Build
 
-Build the current git version (latest tag + commit hash):
+Build the current git version (latest tag in repository + current commit hash):
 
 ```sh
 make build
@@ -21,8 +21,8 @@ make build
 
 **Requirements:**
 - The repository must be in a clean state (no uncommitted changes)
-- The current commit must have an associated tag
-- The built firecracker will be placed in `builds/<tag>_<shorthash>/firecracker`
+- The repository must have at least one tag
+- The built firecracker will be placed in `builds/<latest_tag>_<current_commit_shorthash>/firecracker`
 
 ### CI/CD Build
 
