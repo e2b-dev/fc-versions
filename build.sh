@@ -49,6 +49,9 @@ function build_version {
   echo "Copying finished build to builds directory"
   mkdir -p "../builds/${version_name}"
   cp build/cargo_target/x86_64-unknown-linux-musl/release/firecracker "../builds/${version_name}/firecracker"
+  
+  # Write version name to file for CI to use
+  echo "$version_name" >> ../built_versions.txt
 }
 
 # If a version is passed as argument, build only that version
