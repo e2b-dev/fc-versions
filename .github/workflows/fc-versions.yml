@@ -17,7 +17,6 @@ jobs:
   build:
     uses: ./.github/workflows/build.yml
 
-  # Collect artifacts and publish
   publish:
     name: Collect and upload builds
     needs: build
