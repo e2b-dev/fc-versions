@@ -1,0 +1,28 @@
+name: Build Firecracker Versions
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      hash:
+        required: true
+        type: string
+      version_name:
+        required: true
+        type: string
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Firecracker ${{ inputs.version_name }}
+        run: ./build.sh "${{ inputs.version }}" "${{ inputs.hash }}" "${{ inputs.version_name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firecracker-${{ inputs.version_name }}
+          path: builds/
+          retention-days: 7
