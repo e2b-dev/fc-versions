@@ -100,14 +100,24 @@ jobs:
           git config user.email "github-actions@github.com"
           for dir in ./builds/*/; do
             version_name=$(basename "$dir")
+
+            # Rename binaries so each arch has a unique filename
+            # (gh uses the file's basename as the asset name; #label only sets UI text)
+            for arch_dir in "$dir"/*/; do
+              arch=$(basename "$arch_dir")
+              if [[ -f "$arch_dir/firecracker" ]]; then
+                mv "$arch_dir/firecracker" "$arch_dir/firecracker-${arch}"
+              fi
+            done
+
             # Skip if release already exists
             if git rev-parse "refs/tags/$version_name" >/dev/null 2>&1 || gh release view "$version_name" >/dev/null 2>&1; then
               # Attach any new arch binaries to existing release
               for arch_dir in "$dir"/*/; do
                 arch=$(basename "$arch_dir")
-                binary="$arch_dir/firecracker"
+                binary="$arch_dir/firecracker-${arch}"
                 if [[ -f "$binary" ]]; then
-                  gh release upload "$version_name" "$binary#firecracker-${arch}" --clobber 2>/dev/null || true
+                  gh release upload "$version_name" "$binary" --clobber 2>/dev/null || true
                 fi
               done
               continue
@@ -116,9 +126,9 @@ jobs:
             release_args=()
             for arch_dir in "$dir"/*/; do
               arch=$(basename "$arch_dir")
-              binary="$arch_dir/firecracker"
+              binary="$arch_dir/firecracker-${arch}"
               if [[ -f "$binary" ]]; then
-                release_args+=("$binary#firecracker-${arch}")
+                release_args+=("$binary")
               fi
             done
             git tag "$version_name"
