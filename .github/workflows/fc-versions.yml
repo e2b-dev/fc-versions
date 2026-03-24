@@ -31,12 +31,11 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        version_entry: ${{ fromJson(needs.prepare.outputs.matrix) }}
-        arch: [amd64, arm64]
+        include: ${{ fromJson(needs.prepare.outputs.matrix) }}
     with:
-      version: ${{ matrix.version_entry.version }}
-      hash: ${{ matrix.version_entry.hash }}
-      version_name: ${{ matrix.version_entry.version_name }}
+      version: ${{ matrix.version }}
+      hash: ${{ matrix.hash }}
+      version_name: ${{ matrix.version_name }}
       arch: ${{ matrix.arch }}
 
   check-ci:
