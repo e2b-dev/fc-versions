@@ -18,10 +18,21 @@ cd "$TEMP_DIR/fc-repo"
 
 versions=()
 
-while IFS= read -r version || [[ -n "$version" ]]; do
-  [[ "$version" =~ ^[[:space:]]*# ]] && continue
-  [[ -z "$version" ]] && continue
-  
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ -z "$line" ]] && continue
+
+  # Split line into version spec and optional arch list
+  version=$(echo "$line" | awk '{print $1}')
+  arch_spec=$(echo "$line" | awk '{print $2}')
+
+  # Arch column is required
+  if [[ -z "$arch_spec" ]]; then
+    echo "Error: missing architecture for version $version (e.g. 'v1.12.1 amd64,arm64')" >&2
+    exit 1
+  fi
+
+  # Resolve version and hash
   if [[ "$version" =~ ^([^_]+)_([0-9a-fA-F]+)$ ]]; then
     tag="${BASH_REMATCH[1]}"
     shorthash="${BASH_REMATCH[2]}"
@@ -50,12 +61,17 @@ while IFS= read -r version || [[ -n "$version" ]]; do
       fi
     fi
   fi
-  
-  versions+=("$(jq -n \
-    --arg version "$version" \
-    --arg hash "$fullhash" \
-    --arg version_name "$version_name" \
-    '{version: $version, hash: $hash, version_name: $version_name}')")
+
+  # Emit one matrix entry per architecture
+  IFS=',' read -ra archs <<< "$arch_spec"
+  for arch in "${archs[@]}"; do
+    versions+=("$(jq -n \
+      --arg version "$version" \
+      --arg hash "$fullhash" \
+      --arg version_name "$version_name" \
+      --arg arch "$arch" \
+      '{version: $version, hash: $hash, version_name: $version_name, arch: $arch}')")
+  done
 done < "$OLDPWD/$VERSIONS_FILE"
 
 printf '%s\n' "${versions[@]}" | jq -s -c '.'

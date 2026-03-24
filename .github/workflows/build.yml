@@ -12,17 +12,21 @@ on:
       version_name:
         required: true
         type: string
+      arch:
+        required: true
+        type: string
+        description: "Target architecture: amd64 or arm64"
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build Firecracker ${{ inputs.version_name }}
-        run: ./build.sh "${{ inputs.version }}" "${{ inputs.hash }}" "${{ inputs.version_name }}"
+      - name: Build Firecracker ${{ inputs.version_name }} (${{ inputs.arch }})
+        run: ./build.sh "${{ inputs.version }}" "${{ inputs.hash }}" "${{ inputs.version_name }}" "${{ inputs.arch }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: firecracker-${{ inputs.version_name }}
+          name: firecracker-${{ inputs.version_name }}-${{ inputs.arch }}
           path: builds/
           retention-days: 7
