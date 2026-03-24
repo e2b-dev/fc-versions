@@ -53,7 +53,7 @@ while IFS='|' read -r version commit_hash version_name; do
     all_passed=false
     failed_versions="${failed_versions}${version_name}(unexpected) "
   fi
-done < <(echo "$versions_json" | jq -r '.[] | "\(.version)|\(.hash)|\(.version_name)"')
+done < <(echo "$versions_json" | jq -r '[.[] | {version, hash, version_name}] | unique_by(.hash) | .[] | "\(.version)|\(.hash)|\(.version_name)"')
 
 echo ""
 [[ "$all_passed" == "true" ]] && echo "ci_passed=true" || echo "ci_passed=false"
