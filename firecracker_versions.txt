@@ -4,4 +4,4 @@ v1.10.1_fb257a1 amd64
 v1.10.1_30cbb07 amd64
 v1.12.1_717921c amd64,arm64
 v1.12.1_a41d3fb amd64,arm64
-v1.14.1_bb0e668 amd64,arm64
+v1.14.1_af9c995 amd64,arm64
