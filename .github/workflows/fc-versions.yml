@@ -37,6 +37,7 @@ jobs:
       hash: ${{ matrix.hash }}
       version_name: ${{ matrix.version_name }}
       arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
 
   check-ci:
     needs: prepare

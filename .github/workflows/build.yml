@@ -16,11 +16,15 @@ on:
         required: true
         type: string
         description: "Target architecture: amd64 or arm64"
+      runner:
+        required: true
+        type: string
+        description: "GitHub Actions runner label (e.g. ubuntu-24.04, ubuntu-24.04-arm)"
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Build Firecracker ${{ inputs.version_name }} (${{ inputs.arch }})
