@@ -65,12 +65,21 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   # Emit one matrix entry per architecture
   IFS=',' read -ra archs <<< "$arch_spec"
   for arch in "${archs[@]}"; do
+    case "$arch" in
+      amd64) runner="ubuntu-24.04" ;;
+      arm64) runner="ubuntu-24.04-arm" ;;
+      *)
+        echo "Error: unsupported architecture '$arch' for version $version" >&2
+        exit 1
+        ;;
+    esac
     versions+=("$(jq -n \
       --arg version "$version" \
       --arg hash "$fullhash" \
       --arg version_name "$version_name" \
       --arg arch "$arch" \
-      '{version: $version, hash: $hash, version_name: $version_name, arch: $arch}')")
+      --arg runner "$runner" \
+      '{version: $version, hash: $hash, version_name: $version_name, arch: $arch, runner: $runner}')")
   done
 done < "$OLDPWD/$VERSIONS_FILE"
 
