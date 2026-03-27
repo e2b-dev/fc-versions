@@ -117,8 +117,8 @@ jobs:
 
             # Skip if release already exists
             if git rev-parse "refs/tags/$version_name" >/dev/null 2>&1 || gh release view "$version_name" >/dev/null 2>&1; then
-              # Attach any new arch binaries to existing release
-              for binary in "$release_dir"/firecracker-*; do
+              # Attach any new/updated binaries to existing release
+              for binary in "$release_dir"/firecracker*; do
                 [[ -f "$binary" ]] && gh release upload "$version_name" "$binary" --clobber 2>/dev/null || true
               done
               rm -rf "$release_dir"
@@ -129,6 +129,6 @@ jobs:
             gh release create "$version_name" \
               --title "Firecracker $version_name" \
               --notes "Firecracker build: $version_name" \
-              "$release_dir"/firecracker-*
+              "$release_dir"/firecracker*
             rm -rf "$release_dir"
           done
