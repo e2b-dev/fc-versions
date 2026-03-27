@@ -108,6 +108,10 @@ jobs:
               arch=$(basename "$arch_dir")
               if [[ -f "$arch_dir/firecracker" ]]; then
                 cp "$arch_dir/firecracker" "$release_dir/firecracker-${arch}"
+                # Copy amd64 binary also as "firecracker" for backwards compatibility
+                if [[ "$arch" == "amd64" ]]; then
+                  cp "$arch_dir/firecracker" "$release_dir/firecracker"
+                fi
               fi
             done
 
