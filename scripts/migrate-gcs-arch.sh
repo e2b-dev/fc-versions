@@ -47,13 +47,21 @@ if [[ -z "$objects" ]]; then
   exit 0
 fi
 
-count=0
+copied=0
+skipped=0
 while IFS= read -r src; do
   [[ -z "$src" ]] && continue
 
   # Insert /amd64 before the filename:
   #   .../v1.10.1/firecracker -> .../v1.10.1/amd64/firecracker
   dst="${src%/firecracker}/amd64/firecracker"
+
+  # Skip if destination already exists
+  if gsutil -q stat "$dst" 2>/dev/null; then
+    echo "  SKIP  $dst (already exists)"
+    ((skipped++)) || true
+    continue
+  fi
 
   if [[ "$APPLY" == true ]]; then
     echo "  COPY  $src"
@@ -63,12 +71,12 @@ while IFS= read -r src; do
     echo "  [dry-run] $src"
     echo "         -> $dst"
   fi
-  ((count++)) || true
+  ((copied++)) || true
 done <<< "$objects"
 
 echo ""
-echo "Total: $count objects"
-if [[ "$APPLY" != true ]]; then
+echo "Total: $copied to copy, $skipped skipped (already exist)"
+if [[ "$APPLY" != true && "$copied" -gt 0 ]]; then
   echo ""
   echo "This was a dry run. Add --apply to actually copy."
 fi
