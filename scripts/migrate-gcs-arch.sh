@@ -2,21 +2,25 @@
 # Copies flat-path firecracker binaries into amd64/ subdirectories in GCS.
 #
 # Before ARM64 support was added, builds were uploaded as:
-#   firecrackers/{version_name}/firecracker
+#   {version_name}/firecracker
 #
 # The arch-aware layout expects:
-#   firecrackers/{version_name}/amd64/firecracker
+#   {version_name}/amd64/firecracker
 #
 # This script finds flat-path binaries and copies them into the amd64/ subdir
 # so the orchestrator's arch-based path resolution can find them.
 #
 # Usage:
-#   ./scripts/migrate-gcs-arch.sh <bucket>          # dry-run: show what would be copied
-#   ./scripts/migrate-gcs-arch.sh <bucket> --apply   # copy flat -> amd64/
+#   ./scripts/migrate-gcs-arch.sh <bucket-or-path>          # dry-run: show what would be copied
+#   ./scripts/migrate-gcs-arch.sh <bucket-or-path> --apply   # copy flat -> amd64/
+#
+# Examples:
+#   ./scripts/migrate-gcs-arch.sh gs://e2b-staging-fc-versions
+#   ./scripts/migrate-gcs-arch.sh gs://e2b-prod-public-builds/firecrackers --apply
 
 set -euo pipefail
 
-BUCKET="${1:?Usage: $0 <bucket> [--apply]}"
+GCS_PATH="${1:?Usage: $0 <bucket-or-path> [--apply]}"
 shift
 
 APPLY=false
@@ -27,21 +31,19 @@ for arg in "$@"; do
   esac
 done
 
-# Strip gs:// prefix if provided, we add it back
-BUCKET="${BUCKET#gs://}"
+# Normalize: strip trailing slash
+GCS_PATH="${GCS_PATH%/}"
 
-GCS_PREFIX="firecrackers"
-
-echo "Scanning gs://${BUCKET}/${GCS_PREFIX} for flat-path firecracker binaries..."
+echo "Scanning ${GCS_PATH} for flat-path firecracker binaries..."
 echo ""
 
-# Match only flat-path binaries: firecrackers/{version}/firecracker
+# Match only flat-path binaries: {version}/firecracker
 # The single * does NOT match path separators, so this excludes
-# firecrackers/{version}/{arch}/firecracker.
-objects=$(gsutil ls "gs://${BUCKET}/${GCS_PREFIX}/*/firecracker" 2>/dev/null || true)
+# {version}/{arch}/firecracker.
+objects=$(gsutil ls "${GCS_PATH}/*/firecracker" 2>/dev/null || true)
 
 if [[ -z "$objects" ]]; then
-  echo "No flat-path firecracker binaries found in gs://${BUCKET}/${GCS_PREFIX}"
+  echo "No flat-path firecracker binaries found in ${GCS_PATH}"
   exit 0
 fi
 
@@ -50,7 +52,7 @@ while IFS= read -r src; do
   [[ -z "$src" ]] && continue
 
   # Insert /amd64 before the filename:
-  #   .../firecrackers/v1.10.1/firecracker -> .../firecrackers/v1.10.1/amd64/firecracker
+  #   .../v1.10.1/firecracker -> .../v1.10.1/amd64/firecracker
   dst="${src%/firecracker}/amd64/firecracker"
 
   if [[ "$APPLY" == true ]]; then
