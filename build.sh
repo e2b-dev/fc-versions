@@ -4,19 +4,17 @@ set -euo pipefail
 
 FIRECRACKER_REPO_URL="https://github.com/e2b-dev/firecracker.git"
 
-if [[ $# -lt 3 ]]; then
-  echo "Usage: $0 <tag> <commit_hash> <version_name> [arch]" >&2
-  echo "  tag:          Firecracker version tag (e.g., v1.14.1)" >&2
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <commit_hash> <version_name> [arch]" >&2
   echo "  commit_hash:  Full git commit hash to build" >&2
   echo "  version_name: Output directory name (e.g., v1.14.1_abc1234)" >&2
   echo "  arch:         amd64 (default) or arm64" >&2
   exit 1
 fi
 
-tag="$1"
-commit_hash="$2"
-version_name="$3"
-arch="${4:-amd64}"
+commit_hash="$1"
+version_name="$2"
+arch="${3:-amd64}"
 
 # Map Go/Docker arch names to Rust target triples
 case "$arch" in

@@ -32,7 +32,6 @@ jobs:
     outputs:
       version_name: ${{ steps.validate.outputs.version_name }}
       commit_hash: ${{ steps.validate.outputs.commit_hash }}
-      tag: ${{ steps.validate.outputs.tag }}
       build_matrix: ${{ steps.validate.outputs.build_matrix }}
       skip_build: ${{ steps.validate.outputs.skip_build }}
     steps:
@@ -76,7 +75,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Build Firecracker ${{ needs.validate.outputs.version_name }} (${{ matrix.arch }})
-        run: ./build.sh "${{ needs.validate.outputs.tag }}" "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
+        run: ./build.sh "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7

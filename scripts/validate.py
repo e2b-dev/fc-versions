@@ -279,7 +279,6 @@ def main() -> int:
 
     # Write outputs
     write_github_output({
-        "tag": args.tag,
         "commit_hash": commit_hash,
         "version_name": version_name,
         "build_matrix": json.dumps(build_matrix),
