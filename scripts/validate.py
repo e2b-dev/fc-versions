@@ -15,17 +15,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-@dataclass
-class ValidationResult:
-    """Result of the validation process."""
-    tag: str
-    commit_hash: str
-    version_name: str
-    build_matrix: dict
-    skip_build: bool
-    error: Optional[str] = None
-
-
 def run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run a command and return the result."""
     return subprocess.run(cmd, capture_output=True, text=True, check=check)

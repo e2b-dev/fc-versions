@@ -4,3 +4,4 @@ linux/
 .terraform
 .tfplan
 .env
+__pycache__
