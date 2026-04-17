@@ -39,31 +39,21 @@ def gh_api(endpoint: str) -> Optional[dict]:
     return json.loads(result.stdout)
 
 
-def validate_inputs(build_amd64: bool, build_arm64: bool) -> Optional[str]:
-    """Validate that at least one architecture is selected."""
+def validate_inputs(tag: Optional[str], commit_hash: Optional[str], build_amd64: bool, build_arm64: bool) -> Optional[str]:
+    """Validate inputs."""
     if not build_amd64 and not build_arm64:
         return "At least one architecture must be selected"
+    if not tag and not commit_hash:
+        return "Either tag or commit_hash must be provided"
     return None
 
 
-def resolve_tag_and_commit(
-    tag: str,
-    input_hash: Optional[str],
-    repo: str = "e2b-dev/firecracker"
-) -> tuple[str, Optional[str]]:
+def resolve_tag_to_commit(tag: str, repo: str = "e2b-dev/firecracker") -> tuple[str, Optional[str]]:
     """
-    Resolve the commit hash for a tag.
+    Resolve a tag to its commit hash.
 
     Returns (commit_hash, error_message).
     """
-    if input_hash:
-        # Commit hash provided: validate it exists
-        data = gh_api(f"repos/{repo}/commits/{input_hash}")
-        if not data:
-            return "", f"Commit {input_hash} does not exist in {repo} repository"
-        return data["sha"], None
-
-    # No commit hash: look up from tag
     data = gh_api(f"repos/{repo}/git/ref/tags/{tag}")
     if not data:
         return "", f"Tag {tag} does not exist in {repo} repository"
@@ -76,6 +66,103 @@ def resolve_tag_and_commit(
         commit_hash = tag_object["object"]["sha"]
 
     return commit_hash, None
+
+
+def validate_commit(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[str, Optional[str]]:
+    """
+    Validate that a commit exists.
+
+    Returns (full_sha, error_message).
+    """
+    data = gh_api(f"repos/{repo}/commits/{commit_hash}")
+    if not data:
+        return "", f"Commit {commit_hash} does not exist in {repo} repository"
+    return data["sha"], None
+
+
+def find_tag_for_commit(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[str, Optional[str]]:
+    """
+    Find the most recent tag that is an ancestor of (or equal to) the given commit.
+
+    Returns (tag_name, error_message).
+    """
+    # List tags (GitHub returns them in reverse chronological order by default)
+    tags_data = gh_api(f"repos/{repo}/tags?per_page=100")
+    if not tags_data:
+        return "", "Failed to fetch tags from repository"
+
+    for tag_info in tags_data:
+        tag_name = tag_info["name"]
+        tag_commit = tag_info["commit"]["sha"]
+
+        # Check if this tag's commit is the same as our target
+        if tag_commit == commit_hash:
+            return tag_name, None
+
+        # Check if tag is an ancestor of our commit using compare API
+        compare_data = gh_api(f"repos/{repo}/compare/{tag_commit}...{commit_hash}")
+        if compare_data and compare_data.get("status") in ("ahead", "identical"):
+            return tag_name, None
+
+    return "", f"No tag found that is an ancestor of commit {commit_hash}"
+
+
+def resolve_tag_and_commit(
+    tag: Optional[str],
+    input_hash: Optional[str],
+    repo: str = "e2b-dev/firecracker"
+) -> tuple[str, str, Optional[str]]:
+    """
+    Resolve tag and commit hash.
+
+    Returns (tag, commit_hash, error_message).
+    """
+    if tag and input_hash:
+        # Both provided: validate commit exists and is at or after the tag
+        commit_hash, error = validate_commit(input_hash, repo)
+        if error:
+            return "", "", error
+
+        # Resolve tag to its commit
+        tag_commit, error = resolve_tag_to_commit(tag, repo)
+        if error:
+            return "", "", error
+
+        # Verify commit is at or after the tag (in the same tree)
+        if commit_hash != tag_commit:
+            compare_data = gh_api(f"repos/{repo}/compare/{tag_commit}...{commit_hash}")
+            if not compare_data:
+                return "", "", f"Failed to compare tag {tag} with commit {input_hash}"
+
+            status = compare_data.get("status")
+            if status not in ("ahead", "identical"):
+                return "", "", (
+                    f"Commit {input_hash[:7]} is not at or after tag {tag}. "
+                    f"The commit must be in the same tree and after the tag. "
+                    f"(compare status: {status})"
+                )
+
+        return tag, commit_hash, None
+
+    if tag:
+        # Only tag provided: resolve to commit
+        commit_hash, error = resolve_tag_to_commit(tag, repo)
+        if error:
+            return "", "", error
+        return tag, commit_hash, None
+
+    if input_hash:
+        # Only commit provided: validate and find tag
+        commit_hash, error = validate_commit(input_hash, repo)
+        if error:
+            return "", "", error
+
+        resolved_tag, error = find_tag_for_commit(commit_hash, repo)
+        if error:
+            return "", "", error
+        return resolved_tag, commit_hash, None
+
+    return "", "", "Either tag or commit_hash must be provided"
 
 
 def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[bool, str]:
@@ -221,8 +308,8 @@ def write_github_output(outputs: dict[str, str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Firecracker release inputs")
-    parser.add_argument("--tag", required=True, help="Firecracker version tag (e.g., v1.14.1)")
-    parser.add_argument("--commit-hash", default="", help="Full commit hash to build (optional)")
+    parser.add_argument("--tag", default="", help="Firecracker version tag (e.g., v1.14.1)")
+    parser.add_argument("--commit-hash", default="", help="Full commit hash to build")
     parser.add_argument("--build-amd64", type=lambda x: x.lower() == "true", default=True,
                         help="Build for amd64 architecture")
     parser.add_argument("--build-arm64", type=lambda x: x.lower() == "true", default=True,
@@ -234,26 +321,30 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    tag = args.tag if args.tag else None
+    commit_hash_input = args.commit_hash if args.commit_hash else None
+
     # Step 1: Validate inputs
-    error = validate_inputs(args.build_amd64, args.build_arm64)
+    error = validate_inputs(tag, commit_hash_input, args.build_amd64, args.build_arm64)
     if error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
 
     # Step 2: Resolve tag and commit hash
-    print(f"Resolving tag {args.tag}...", file=sys.stderr)
-    commit_hash, error = resolve_tag_and_commit(
-        args.tag,
-        args.commit_hash if args.commit_hash else None
-    )
+    if tag:
+        print(f"Resolving tag {tag}...", file=sys.stderr)
+    else:
+        print(f"Finding tag for commit {commit_hash_input}...", file=sys.stderr)
+
+    tag, commit_hash, error = resolve_tag_and_commit(tag, commit_hash_input)
     if error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
 
     short_hash = commit_hash[:7]
-    version_name = f"{args.tag}_{short_hash}"
+    version_name = f"{tag}_{short_hash}"
 
-    print(f"Tag: {args.tag}", file=sys.stderr)
+    print(f"Tag: {tag}", file=sys.stderr)
     print(f"Full commit hash: {commit_hash}", file=sys.stderr)
     print(f"Short hash: {short_hash}", file=sys.stderr)
     print(f"Version name: {version_name}", file=sys.stderr)

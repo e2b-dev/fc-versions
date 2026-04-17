@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Firecracker version tag (e.g., v1.14.1)'
-        required: true
+        description: 'Firecracker version tag (e.g., v1.14.1). If omitted, uses most recent tag from commit.'
+        required: false
         type: string
       commit_hash:
-        description: 'Full commit hash to build (optional, defaults to tag commit)'
+        description: 'Full commit hash to build. Required if tag is omitted.'
         required: false
         type: string
       build_amd64:
