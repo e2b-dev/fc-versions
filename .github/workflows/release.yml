@@ -30,103 +30,13 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     outputs:
-      version_name: ${{ steps.version.outputs.version_name }}
-      commit_hash: ${{ steps.version.outputs.commit_hash }}
-      tag: ${{ steps.version.outputs.tag }}
-      build_matrix: ${{ steps.matrix.outputs.matrix }}
-      skip_build: ${{ steps.matrix.outputs.skip_build }}
+      version_name: ${{ steps.validate.outputs.version_name }}
+      commit_hash: ${{ steps.validate.outputs.commit_hash }}
+      tag: ${{ steps.validate.outputs.tag }}
+      build_matrix: ${{ steps.validate.outputs.build_matrix }}
+      skip_build: ${{ steps.validate.outputs.skip_build }}
     steps:
-      - name: Validate inputs
-        run: |
-          if [[ "${{ inputs.build_amd64 }}" != "true" && "${{ inputs.build_arm64 }}" != "true" ]]; then
-            echo "Error: At least one architecture must be selected"
-            exit 1
-          fi
-
-      - name: Resolve tag and commit hash
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="${{ inputs.tag }}"
-          input_hash="${{ inputs.commit_hash }}"
-
-          if [[ -n "$input_hash" ]]; then
-            # Commit hash provided: validate it exists
-            echo "Validating commit $input_hash..."
-            commit_hash=$(gh api "repos/e2b-dev/firecracker/commits/$input_hash" --jq '.sha' 2>/dev/null) || {
-              echo "Error: Commit $input_hash does not exist in e2b-dev/firecracker repository"
-              exit 1
-            }
-          else
-            # No commit hash: look up from tag
-            echo "Looking up commit hash for tag $tag..."
-            commit_hash=$(gh api "repos/e2b-dev/firecracker/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null) || {
-              echo "Error: Tag $tag does not exist in e2b-dev/firecracker repository"
-              exit 1
-            }
-
-            # Handle annotated tags (need to dereference to get commit SHA)
-            # If the ref points to a tag object, we need to get the commit it points to
-            tag_object=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" 2>/dev/null || echo "")
-            if [[ -n "$tag_object" ]]; then
-              # Successfully fetched tag object, extract the commit SHA it points to
-              commit_hash=$(echo "$tag_object" | jq -r '.object.sha')
-            fi
-          fi
-
-          short_hash="${commit_hash:0:7}"
-          version_name="${tag}_${short_hash}"
-
-          echo "Tag: $tag"
-          echo "Full commit hash: $commit_hash"
-          echo "Short hash: $short_hash"
-          echo "Version name: $version_name"
-
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "commit_hash=$commit_hash" >> "$GITHUB_OUTPUT"
-          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
-
-      - name: Check CI status for commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          commit_hash="${{ steps.version.outputs.commit_hash }}"
-          echo "Checking CI status for commit $commit_hash..."
-
-          # Check commit status API
-          status_response=$(gh api "/repos/e2b-dev/firecracker/commits/$commit_hash/status" 2>/dev/null || echo '{"state":"unknown","total_count":0}')
-          status=$(echo "$status_response" | jq -r '.state')
-          status_count=$(echo "$status_response" | jq -r '.total_count')
-
-          # Check check-runs API
-          check_response=$(gh api "/repos/e2b-dev/firecracker/commits/$commit_hash/check-runs" 2>/dev/null || echo '{"total_count":0}')
-          check_count=$(echo "$check_response" | jq -r '.total_count')
-          check_conclusion=$(echo "$check_response" | jq -r '
-            if .total_count == 0 then "no_checks"
-            elif ([.check_runs[].status] | any(. == "in_progress" or . == "queued")) then "pending"
-            elif ([.check_runs[].conclusion] | any(. == "failure" or . == "cancelled" or . == "timed_out")) then "failure"
-            elif ([.check_runs[].conclusion] | all(. == "success" or . == "skipped" or . == "neutral")) then "success"
-            else "unknown"
-            end
-          ')
-
-          echo "Status API: state=$status, count=$status_count"
-          echo "Check-runs API: conclusion=$check_conclusion, count=$check_count"
-
-          if [[ "$status" == "failure" ]] || [[ "$check_conclusion" == "failure" ]]; then
-            echo "::error::CI failed for commit $commit_hash - refusing to build"
-            exit 1
-          elif [[ "$check_conclusion" == "pending" ]] || ([[ "$status" == "pending" ]] && [[ "$status_count" -gt 0 ]]); then
-            echo "::error::CI is still running for commit $commit_hash - refusing to build"
-            exit 1
-          elif [[ "$status" == "success" ]] || [[ "$check_conclusion" == "success" ]]; then
-            echo "CI passed for commit $commit_hash"
-          elif [[ "$status_count" -eq 0 ]] && [[ "$check_count" -eq 0 ]]; then
-            echo "::warning::No CI checks found for commit $commit_hash - proceeding anyway"
-          else
-            echo "::warning::Could not definitively verify CI status (status=$status, check_conclusion=$check_conclusion) - proceeding anyway"
-          fi
+      - uses: actions/checkout@v6
 
       - name: Setup GCS credentials
         uses: google-github-actions/auth@v3
@@ -134,107 +44,18 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
 
-      - name: Check existing artifacts and generate build matrix
-        id: matrix
+      - name: Validate inputs and resolve version
+        id: validate
         env:
           GH_TOKEN: ${{ github.token }}
           GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          version_name="${{ steps.version.outputs.version_name }}"
-
-          # Track what needs to be built
-          need_amd64=false
-          need_arm64=false
-
-          # Check GitHub release for existing artifacts
-          release_assets=""
-          if gh release view "$version_name" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $version_name exists"
-            release_assets=$(gh release view "$version_name" --repo "${{ github.repository }}" --json assets -q '.assets[].name')
-          else
-            echo "Release $version_name does not exist"
-          fi
-
-          # Check each requested architecture
-          for arch in amd64 arm64; do
-            # Skip if not requested
-            if [[ "$arch" == "amd64" && "${{ inputs.build_amd64 }}" != "true" ]]; then
-              continue
-            fi
-            if [[ "$arch" == "arm64" && "${{ inputs.build_arm64 }}" != "true" ]]; then
-              continue
-            fi
-
-            gcs_exists=false
-            release_exists=false
-
-            # Check GCS
-            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
-            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
-              gcs_exists=true
-              echo "GCS: $arch artifact exists"
-            else
-              echo "GCS: $arch artifact missing"
-            fi
-
-            # Check GitHub release
-            if echo "$release_assets" | grep -q "^firecracker-${arch}$"; then
-              release_exists=true
-              echo "Release: $arch artifact exists"
-            else
-              echo "Release: $arch artifact missing"
-            fi
-
-            # Need to build if missing from either location
-            if [[ "$gcs_exists" == "false" || "$release_exists" == "false" ]]; then
-              if [[ "$arch" == "amd64" ]]; then
-                need_amd64=true
-              else
-                need_arm64=true
-              fi
-            fi
-          done
-
-          # Check if nothing to do
-          if [[ "$need_amd64" == "false" && "$need_arm64" == "false" ]]; then
-            echo ""
-            echo "=============================================="
-            echo "SKIPPING BUILD: All requested artifacts already exist"
-            echo "=============================================="
-            echo ""
-            echo "The following artifacts were found:"
-            echo "  - GCS: gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/"
-            echo "  - GitHub Release: https://github.com/${{ github.repository }}/releases/tag/${version_name}"
-            echo ""
-            echo "To rebuild, first delete the existing artifacts from GCS and/or GitHub."
-            echo ""
-            echo "::notice::Skipped build - all requested artifacts already exist in both GCS and GitHub release"
-            echo "skip_build=true" >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "skip_build=false" >> "$GITHUB_OUTPUT"
-
-          # Generate build matrix
-          matrix='{"include":['
-          first=true
-
-          if [[ "$need_amd64" == "true" ]]; then
-            matrix+='{"arch":"amd64","runner":"ubuntu-24.04"}'
-            first=false
-          fi
-
-          if [[ "$need_arm64" == "true" ]]; then
-            if [[ "$first" == "false" ]]; then
-              matrix+=','
-            fi
-            matrix+='{"arch":"arm64","runner":"ubuntu-24.04-arm"}'
-          fi
-
-          matrix+=']}'
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          echo "Build matrix: $matrix"
+          python3 scripts/validate.py \
+            --tag "${{ inputs.tag }}" \
+            --commit-hash "${{ inputs.commit_hash }}" \
+            --build-amd64 "${{ inputs.build_amd64 }}" \
+            --build-arm64 "${{ inputs.build_arm64 }}"
 
   build:
     needs: validate
