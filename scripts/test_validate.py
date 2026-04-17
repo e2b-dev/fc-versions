@@ -358,58 +358,51 @@ class TestCheckExistingArtifacts:
     """Tests for check_existing_artifacts function."""
 
     def test_all_artifacts_exist_skip_build(self):
-        """Test when all artifacts exist in both GCS and release."""
+        """Test when all artifacts exist in release."""
         with patch("validate.check_release_artifacts", return_value={"firecracker-amd64", "firecracker-arm64"}):
-            with patch("validate.check_gcs_artifact", return_value=True):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, True, "my-bucket", "owner/repo"
-                )
-                assert skip is True
-                assert matrix == {"include": []}
+            matrix, skip = check_existing_artifacts(
+                "v1.0.0_abc1234", True, True, "owner/repo"
+            )
+            assert skip is True
+            assert matrix == {"include": []}
 
     def test_no_artifacts_exist_build_both(self):
         """Test when no artifacts exist."""
         with patch("validate.check_release_artifacts", return_value=set()):
-            with patch("validate.check_gcs_artifact", return_value=False):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, True, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 2
-                archs = {item["arch"] for item in matrix["include"]}
-                assert archs == {"amd64", "arm64"}
+            matrix, skip = check_existing_artifacts(
+                "v1.0.0_abc1234", True, True, "owner/repo"
+            )
+            assert skip is False
+            assert len(matrix["include"]) == 2
+            archs = {item["arch"] for item in matrix["include"]}
+            assert archs == {"amd64", "arm64"}
 
     def test_only_amd64_missing(self):
         """Test when only amd64 is missing."""
         with patch("validate.check_release_artifacts", return_value={"firecracker-arm64"}):
-            with patch("validate.check_gcs_artifact") as mock_gcs:
-                mock_gcs.side_effect = lambda bucket, version, arch: arch == "arm64"
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, True, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 1
-                assert matrix["include"][0]["arch"] == "amd64"
+            matrix, skip = check_existing_artifacts(
+                "v1.0.0_abc1234", True, True, "owner/repo"
+            )
+            assert skip is False
+            assert len(matrix["include"]) == 1
+            assert matrix["include"][0]["arch"] == "amd64"
 
     def test_only_arm64_requested_and_missing(self):
         """Test when only arm64 is requested and missing."""
         with patch("validate.check_release_artifacts", return_value=set()):
-            with patch("validate.check_gcs_artifact", return_value=False):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", False, True, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 1
-                assert matrix["include"][0]["arch"] == "arm64"
-                assert matrix["include"][0]["runner"] == "ubuntu-24.04-arm"
+            matrix, skip = check_existing_artifacts(
+                "v1.0.0_abc1234", False, True, "owner/repo"
+            )
+            assert skip is False
+            assert len(matrix["include"]) == 1
+            assert matrix["include"][0]["arch"] == "arm64"
+            assert matrix["include"][0]["runner"] == "ubuntu-24.04-arm"
 
-    def test_gcs_missing_but_release_exists(self):
-        """Test when GCS is missing but release exists (still needs build)."""
+    def test_amd64_exists_in_release(self):
+        """Test when amd64 exists in release (skip build for amd64)."""
         with patch("validate.check_release_artifacts", return_value={"firecracker-amd64"}):
-            with patch("validate.check_gcs_artifact", return_value=False):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, False, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 1
-                assert matrix["include"][0]["arch"] == "amd64"
+            matrix, skip = check_existing_artifacts(
+                "v1.0.0_abc1234", True, False, "owner/repo"
+            )
+            assert skip is True
+            assert matrix == {"include": []}
