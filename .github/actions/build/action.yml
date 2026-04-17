@@ -1,0 +1,30 @@
+name: Build Firecracker
+description: Build Firecracker binary for a specific version and architecture
+
+inputs:
+  version:
+    description: 'Firecracker version tag (e.g., v1.14.1)'
+    required: true
+  hash:
+    description: 'Full commit hash to build'
+    required: true
+  version_name:
+    description: 'Version name for output directory (e.g., v1.14.1_abc1234)'
+    required: true
+  arch:
+    description: 'Target architecture: amd64 or arm64'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build Firecracker ${{ inputs.version_name }} (${{ inputs.arch }})
+      shell: bash
+      run: ./build.sh "${{ inputs.version }}" "${{ inputs.hash }}" "${{ inputs.version_name }}" "${{ inputs.arch }}"
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: firecracker-${{ inputs.version_name }}-${{ inputs.arch }}
+        path: builds/
+        retention-days: 7

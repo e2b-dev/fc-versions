@@ -1,0 +1,332 @@
+name: Manual Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Firecracker version tag (e.g., v1.14.1). Optional if commit_hash is provided.'
+        required: false
+        type: string
+      commit_hash:
+        description: 'Full commit hash to build. Optional if tag is provided.'
+        required: false
+        type: string
+      build_amd64:
+        description: 'Build for amd64 architecture'
+        required: false
+        type: boolean
+        default: true
+      build_arm64:
+        description: 'Build for arm64 architecture'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version_name: ${{ steps.version.outputs.version_name }}
+      commit_hash: ${{ steps.version.outputs.commit_hash }}
+      tag: ${{ steps.version.outputs.tag }}
+      build_matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ "${{ inputs.build_amd64 }}" != "true" && "${{ inputs.build_arm64 }}" != "true" ]]; then
+            echo "Error: At least one architecture must be selected"
+            exit 1
+          fi
+
+          if [[ -z "${{ inputs.tag }}" && -z "${{ inputs.commit_hash }}" ]]; then
+            echo "Error: At least one of 'tag' or 'commit_hash' must be provided"
+            exit 1
+          fi
+
+      - name: Resolve tag and commit hash
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          input_tag="${{ inputs.tag }}"
+          input_hash="${{ inputs.commit_hash }}"
+
+          if [[ -n "$input_hash" && -n "$input_tag" ]]; then
+            # Both provided: validate commit exists and use provided tag
+            echo "Both tag and commit_hash provided, validating commit..."
+            commit_hash=$(gh api "repos/e2b-dev/firecracker/commits/$input_hash" --jq '.sha' 2>/dev/null) || {
+              echo "Error: Commit $input_hash does not exist in e2b-dev/firecracker repository"
+              exit 1
+            }
+            tag="$input_tag"
+
+          elif [[ -n "$input_tag" && -z "$input_hash" ]]; then
+            # Only tag provided: look up commit hash from tag
+            echo "Looking up commit hash for tag $input_tag..."
+            commit_hash=$(gh api "repos/e2b-dev/firecracker/git/ref/tags/$input_tag" --jq '.object.sha' 2>/dev/null) || {
+              echo "Error: Tag $input_tag does not exist in e2b-dev/firecracker repository"
+              exit 1
+            }
+
+            # Handle annotated tags (need to dereference to get commit SHA)
+            object_type=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" --jq '.object.type' 2>/dev/null || echo "commit")
+            if [[ "$object_type" == "commit" ]]; then
+              commit_hash=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" --jq '.object.sha' 2>/dev/null || echo "$commit_hash")
+            fi
+
+            tag="$input_tag"
+
+          elif [[ -z "$input_tag" && -n "$input_hash" ]]; then
+            # Only commit_hash provided: find most recent tag containing this commit
+            echo "Looking up most recent tag for commit $input_hash..."
+
+            # Validate commit exists first
+            commit_hash=$(gh api "repos/e2b-dev/firecracker/commits/$input_hash" --jq '.sha' 2>/dev/null) || {
+              echo "Error: Commit $input_hash does not exist in e2b-dev/firecracker repository"
+              exit 1
+            }
+
+            # Get all tags sorted by commit date (most recent first)
+            tag=$(gh api "repos/e2b-dev/firecracker/tags" --paginate --jq '.[].name' 2>/dev/null | while read -r t; do
+              # Check if commit is an ancestor of this tag
+              tag_sha=$(gh api "repos/e2b-dev/firecracker/git/ref/tags/$t" --jq '.object.sha' 2>/dev/null) || continue
+
+              # Handle annotated tags
+              tag_commit=$(gh api "repos/e2b-dev/firecracker/git/tags/$tag_sha" --jq '.object.sha' 2>/dev/null || echo "$tag_sha")
+
+              # Check if the tag points to this commit or an ancestor
+              compare=$(gh api "repos/e2b-dev/firecracker/compare/$commit_hash...$tag_commit" --jq '.status' 2>/dev/null) || continue
+              if [[ "$compare" == "identical" || "$compare" == "ahead" ]]; then
+                echo "$t"
+                break
+              fi
+            done | head -1)
+
+            if [[ -z "$tag" ]]; then
+              echo "Error: Could not find a tag containing commit $input_hash"
+              exit 1
+            fi
+          fi
+
+          short_hash="${commit_hash:0:7}"
+          version_name="${tag}_${short_hash}"
+
+          echo "Tag: $tag"
+          echo "Full commit hash: $commit_hash"
+          echo "Short hash: $short_hash"
+          echo "Version name: $version_name"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit_hash=$commit_hash" >> "$GITHUB_OUTPUT"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Setup GCS credentials
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Check existing artifacts and generate build matrix
+        id: matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
+        run: |
+          version_name="${{ steps.version.outputs.version_name }}"
+
+          # Track what needs to be built
+          need_amd64=false
+          need_arm64=false
+
+          # Check GitHub release for existing artifacts
+          release_assets=""
+          if gh release view "$version_name" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $version_name exists"
+            release_assets=$(gh release view "$version_name" --repo "${{ github.repository }}" --json assets -q '.assets[].name')
+          else
+            echo "Release $version_name does not exist"
+          fi
+
+          # Check each requested architecture
+          for arch in amd64 arm64; do
+            # Skip if not requested
+            if [[ "$arch" == "amd64" && "${{ inputs.build_amd64 }}" != "true" ]]; then
+              continue
+            fi
+            if [[ "$arch" == "arm64" && "${{ inputs.build_arm64 }}" != "true" ]]; then
+              continue
+            fi
+
+            gcs_exists=false
+            release_exists=false
+
+            # Check GCS
+            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
+            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
+              gcs_exists=true
+              echo "GCS: $arch artifact exists"
+            else
+              echo "GCS: $arch artifact missing"
+            fi
+
+            # Check GitHub release
+            if echo "$release_assets" | grep -q "^firecracker-${arch}$"; then
+              release_exists=true
+              echo "Release: $arch artifact exists"
+            else
+              echo "Release: $arch artifact missing"
+            fi
+
+            # Need to build if missing from either location
+            if [[ "$gcs_exists" == "false" || "$release_exists" == "false" ]]; then
+              if [[ "$arch" == "amd64" ]]; then
+                need_amd64=true
+              else
+                need_arm64=true
+              fi
+            fi
+          done
+
+          # Fail if nothing to do
+          if [[ "$need_amd64" == "false" && "$need_arm64" == "false" ]]; then
+            echo "Error: Nothing to do - all requested artifacts already exist in both GCS and GitHub release"
+            exit 1
+          fi
+
+          # Generate build matrix
+          matrix='{"include":['
+          first=true
+
+          if [[ "$need_amd64" == "true" ]]; then
+            matrix+='{"arch":"amd64","runner":"ubuntu-24.04"}'
+            first=false
+          fi
+
+          if [[ "$need_arm64" == "true" ]]; then
+            if [[ "$first" == "false" ]]; then
+              matrix+=','
+            fi
+            matrix+='{"arch":"arm64","runner":"ubuntu-24.04-arm"}'
+          fi
+
+          matrix+=']}'
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Build matrix: $matrix"
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.validate.outputs.build_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/build
+        with:
+          version: ${{ needs.validate.outputs.tag }}
+          hash: ${{ needs.validate.outputs.commit_hash }}
+          version_name: ${{ needs.validate.outputs.version_name }}
+          arch: ${{ matrix.arch }}
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./builds
+          merge-multiple: true
+
+      - name: Display build artifacts
+        run: |
+          echo "Build artifacts:"
+          find ./builds -type f | head -50
+
+      - name: Setup Service Account
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Upload to GCS (skip existing)
+        env:
+          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
+        run: |
+          version_name="${{ needs.validate.outputs.version_name }}"
+
+          for arch in amd64 arm64; do
+            local_path="./builds/$version_name/$arch/firecracker"
+            if [[ ! -f "$local_path" ]]; then
+              continue
+            fi
+
+            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
+
+            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
+              echo "GCS: $arch artifact already exists, skipping"
+            else
+              echo "GCS: Uploading $arch artifact..."
+              gcloud storage cp "$local_path" "$gcs_path"
+            fi
+          done
+
+      - name: Create or update GitHub release (skip existing artifacts)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          version_name="${{ needs.validate.outputs.version_name }}"
+
+          # Configure git for tagging
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create release if it doesn't exist
+          if ! gh release view "$version_name" >/dev/null 2>&1; then
+            echo "Creating new release $version_name..."
+
+            # Create and push tag if it doesn't exist
+            if ! git rev-parse "refs/tags/$version_name" >/dev/null 2>&1; then
+              git tag "$version_name"
+              git push origin "$version_name"
+            fi
+
+            gh release create "$version_name" \
+              --title "Firecracker $version_name" \
+              --notes "Firecracker build: $version_name (manual build from commit ${{ needs.validate.outputs.commit_hash }})"
+          fi
+
+          # Get existing release assets
+          existing_assets=$(gh release view "$version_name" --json assets -q '.assets[].name')
+
+          # Upload missing artifacts
+          for arch in amd64 arm64; do
+            local_path="./builds/$version_name/$arch/firecracker"
+            if [[ ! -f "$local_path" ]]; then
+              continue
+            fi
+
+            asset_name="firecracker-${arch}"
+
+            if echo "$existing_assets" | grep -q "^${asset_name}$"; then
+              echo "Release: $arch artifact already exists, skipping"
+            else
+              echo "Release: Uploading $arch artifact..."
+              # Create temp file with correct name
+              tmp_file=$(mktemp -d)/${asset_name}
+              cp "$local_path" "$tmp_file"
+              gh release upload "$version_name" "$tmp_file"
+              rm -f "$tmp_file"
+            fi
+          done
+
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$version_name"
