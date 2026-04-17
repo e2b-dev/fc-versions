@@ -208,13 +208,6 @@ def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tupl
     return True, f"Could not definitively verify CI status (status={status}, check_conclusion={check_conclusion}) - proceeding anyway"
 
 
-def check_gcs_artifact(bucket: str, version_name: str, arch: str) -> bool:
-    """Check if an artifact exists in GCS."""
-    gcs_path = f"gs://{bucket}/firecrackers/{version_name}/{arch}/firecracker"
-    result = run_command(["gcloud", "storage", "ls", gcs_path], check=False)
-    return result.returncode == 0
-
-
 def check_release_artifacts(github_repo: str, version_name: str) -> set[str]:
     """Get the set of artifact names in a GitHub release."""
     result = run_command([
@@ -234,7 +227,6 @@ def check_existing_artifacts(
     version_name: str,
     build_amd64: bool,
     build_arm64: bool,
-    gcp_bucket: str,
     github_repo: str
 ) -> tuple[dict, bool]:
     """
@@ -251,13 +243,11 @@ def check_existing_artifacts(
         if not requested:
             continue
 
-        gcs_exists = check_gcs_artifact(gcp_bucket, version_name, arch)
         release_exists = f"firecracker-{arch}" in release_assets
 
-        print(f"GCS: {arch} artifact {'exists' if gcs_exists else 'missing'}", file=sys.stderr)
         print(f"Release: {arch} artifact {'exists' if release_exists else 'missing'}", file=sys.stderr)
 
-        if not gcs_exists or not release_exists:
+        if not release_exists:
             if arch == "amd64":
                 need_amd64 = True
             else:
@@ -269,7 +259,7 @@ def check_existing_artifacts(
         print("SKIPPING BUILD: All requested artifacts already exist", file=sys.stderr)
         print("==============================================", file=sys.stderr)
         print("", file=sys.stderr)
-        print(f"::notice::Skipped build - all requested artifacts already exist in both GCS and GitHub release", file=sys.stderr)
+        print("::notice::Skipped build - all requested artifacts already exist in GitHub release", file=sys.stderr)
         return {"include": []}, True
 
     # Generate build matrix
@@ -303,8 +293,6 @@ def main() -> int:
                         help="Build for amd64 architecture")
     parser.add_argument("--build-arm64", type=lambda x: x.lower() == "true", default=True,
                         help="Build for arm64 architecture")
-    parser.add_argument("--gcp-bucket", default=os.environ.get("GCP_BUCKET_NAME", ""),
-                        help="GCP bucket name")
     parser.add_argument("--github-repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
                         help="GitHub repository (owner/repo)")
 
@@ -351,7 +339,6 @@ def main() -> int:
         version_name,
         args.build_amd64,
         args.build_arm64,
-        args.gcp_bucket,
         args.github_repo
     )
 
