@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Firecracker version tag (e.g., v1.14.1). Optional if commit_hash is provided.'
-        required: false
+        description: 'Firecracker version tag (e.g., v1.14.1)'
+        required: true
         type: string
       commit_hash:
-        description: 'Full commit hash to build. Optional if tag is provided.'
+        description: 'Full commit hash to build (optional, defaults to tag commit)'
         required: false
         type: string
       build_amd64:
@@ -34,6 +34,7 @@ jobs:
       commit_hash: ${{ steps.version.outputs.commit_hash }}
       tag: ${{ steps.version.outputs.tag }}
       build_matrix: ${{ steps.matrix.outputs.matrix }}
+      skip_build: ${{ steps.matrix.outputs.skip_build }}
     steps:
       - name: Validate inputs
         run: |
@@ -42,73 +43,33 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "${{ inputs.tag }}" && -z "${{ inputs.commit_hash }}" ]]; then
-            echo "Error: At least one of 'tag' or 'commit_hash' must be provided"
-            exit 1
-          fi
-
       - name: Resolve tag and commit hash
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          input_tag="${{ inputs.tag }}"
+          tag="${{ inputs.tag }}"
           input_hash="${{ inputs.commit_hash }}"
 
-          if [[ -n "$input_hash" && -n "$input_tag" ]]; then
-            # Both provided: validate commit exists and use provided tag
-            echo "Both tag and commit_hash provided, validating commit..."
+          if [[ -n "$input_hash" ]]; then
+            # Commit hash provided: validate it exists
+            echo "Validating commit $input_hash..."
             commit_hash=$(gh api "repos/e2b-dev/firecracker/commits/$input_hash" --jq '.sha' 2>/dev/null) || {
               echo "Error: Commit $input_hash does not exist in e2b-dev/firecracker repository"
               exit 1
             }
-            tag="$input_tag"
-
-          elif [[ -n "$input_tag" && -z "$input_hash" ]]; then
-            # Only tag provided: look up commit hash from tag
-            echo "Looking up commit hash for tag $input_tag..."
-            commit_hash=$(gh api "repos/e2b-dev/firecracker/git/ref/tags/$input_tag" --jq '.object.sha' 2>/dev/null) || {
-              echo "Error: Tag $input_tag does not exist in e2b-dev/firecracker repository"
+          else
+            # No commit hash: look up from tag
+            echo "Looking up commit hash for tag $tag..."
+            commit_hash=$(gh api "repos/e2b-dev/firecracker/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null) || {
+              echo "Error: Tag $tag does not exist in e2b-dev/firecracker repository"
               exit 1
             }
 
             # Handle annotated tags (need to dereference to get commit SHA)
             object_type=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" --jq '.object.type' 2>/dev/null || echo "commit")
-            if [[ "$object_type" == "commit" ]]; then
+            if [[ "$object_type" == "tag" ]]; then
               commit_hash=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" --jq '.object.sha' 2>/dev/null || echo "$commit_hash")
-            fi
-
-            tag="$input_tag"
-
-          elif [[ -z "$input_tag" && -n "$input_hash" ]]; then
-            # Only commit_hash provided: find most recent tag containing this commit
-            echo "Looking up most recent tag for commit $input_hash..."
-
-            # Validate commit exists first
-            commit_hash=$(gh api "repos/e2b-dev/firecracker/commits/$input_hash" --jq '.sha' 2>/dev/null) || {
-              echo "Error: Commit $input_hash does not exist in e2b-dev/firecracker repository"
-              exit 1
-            }
-
-            # Get all tags sorted by commit date (most recent first)
-            tag=$(gh api "repos/e2b-dev/firecracker/tags" --paginate --jq '.[].name' 2>/dev/null | while read -r t; do
-              # Check if commit is an ancestor of this tag
-              tag_sha=$(gh api "repos/e2b-dev/firecracker/git/ref/tags/$t" --jq '.object.sha' 2>/dev/null) || continue
-
-              # Handle annotated tags
-              tag_commit=$(gh api "repos/e2b-dev/firecracker/git/tags/$tag_sha" --jq '.object.sha' 2>/dev/null || echo "$tag_sha")
-
-              # Check if the tag points to this commit or an ancestor
-              compare=$(gh api "repos/e2b-dev/firecracker/compare/$commit_hash...$tag_commit" --jq '.status' 2>/dev/null) || continue
-              if [[ "$compare" == "identical" || "$compare" == "ahead" ]]; then
-                echo "$t"
-                break
-              fi
-            done | head -1)
-
-            if [[ -z "$tag" ]]; then
-              echo "Error: Could not find a tag containing commit $input_hash"
-              exit 1
             fi
           fi
 
@@ -191,11 +152,15 @@ jobs:
             fi
           done
 
-          # Fail if nothing to do
+          # Check if nothing to do
           if [[ "$need_amd64" == "false" && "$need_arm64" == "false" ]]; then
-            echo "Error: Nothing to do - all requested artifacts already exist in both GCS and GitHub release"
-            exit 1
+            echo "Nothing to do - all requested artifacts already exist in both GCS and GitHub release"
+            echo "skip_build=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          echo "skip_build=false" >> "$GITHUB_OUTPUT"
 
           # Generate build matrix
           matrix='{"include":['
@@ -219,6 +184,7 @@ jobs:
 
   build:
     needs: validate
+    if: needs.validate.outputs.skip_build != 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.validate.outputs.build_matrix) }}
@@ -238,6 +204,7 @@ jobs:
 
   publish:
     needs: [validate, build]
+    if: needs.validate.outputs.skip_build != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
