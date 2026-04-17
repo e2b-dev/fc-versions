@@ -1,0 +1,199 @@
+name: Manual Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Firecracker version tag (e.g., v1.14.1). If omitted, uses most recent tag from commit.'
+        required: false
+        type: string
+      commit_hash:
+        description: 'Full commit hash to build. Required if tag is omitted.'
+        required: false
+        type: string
+      build_amd64:
+        description: 'Build for amd64 architecture'
+        required: false
+        type: boolean
+        default: true
+      build_arm64:
+        description: 'Build for arm64 architecture'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version_name: ${{ steps.validate.outputs.version_name }}
+      commit_hash: ${{ steps.validate.outputs.commit_hash }}
+      build_matrix: ${{ steps.validate.outputs.build_matrix }}
+      skip_build: ${{ steps.validate.outputs.skip_build }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup GCS credentials
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Parse .tool-versions
+        uses: wistia/parse-tool-versions@v2.1.1
+
+      - name: Install python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON }}
+
+      - name: Validate inputs and resolve version
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/validate.py \
+            --tag "${{ inputs.tag }}" \
+            --commit-hash "${{ inputs.commit_hash }}" \
+            --build-amd64 "${{ inputs.build_amd64 }}" \
+            --build-arm64 "${{ inputs.build_arm64 }}"
+
+  build:
+    needs: validate
+    if: needs.validate.outputs.skip_build != 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.validate.outputs.build_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build Firecracker ${{ needs.validate.outputs.version_name }} (${{ matrix.arch }})
+        run: ./build.sh "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecracker-${{ needs.validate.outputs.version_name }}-${{ matrix.arch }}
+          path: builds/
+          retention-days: 7
+
+  publish:
+    needs: [validate, build]
+    if: needs.validate.outputs.skip_build != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./builds
+          merge-multiple: true
+
+      - name: Display build artifacts
+        run: |
+          echo "Build artifacts:"
+          find ./builds -type f | head -50
+
+      - name: Setup Service Account
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Upload to GCS (skip existing)
+        env:
+          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
+        run: |
+          version_name="${{ needs.validate.outputs.version_name }}"
+
+          for arch in amd64 arm64; do
+            local_path="./builds/$version_name/$arch/firecracker"
+            if [[ ! -f "$local_path" ]]; then
+              continue
+            fi
+
+            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
+
+            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
+              echo "GCS: $arch artifact already exists, skipping"
+            else
+              echo "GCS: Uploading $arch artifact..."
+              gcloud storage cp "$local_path" "$gcs_path"
+            fi
+          done
+
+      - name: Create or update GitHub release (skip existing artifacts)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          version_name="${{ needs.validate.outputs.version_name }}"
+
+          # Configure git for tagging
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create release if it doesn't exist
+          if ! gh release view "$version_name" >/dev/null 2>&1; then
+            echo "Creating new release $version_name..."
+
+            # Create and push tag if it doesn't exist
+            if ! git rev-parse "refs/tags/$version_name" >/dev/null 2>&1; then
+              git tag "$version_name"
+              git push origin "$version_name"
+            fi
+
+            gh release create "$version_name" \
+              --title "Firecracker $version_name" \
+              --notes "Firecracker build: $version_name (manual build from commit ${{ needs.validate.outputs.commit_hash }})"
+          fi
+
+          # Get existing release assets
+          existing_assets=$(gh release view "$version_name" --json assets -q '.assets[].name')
+
+          # Upload missing artifacts
+          for arch in amd64 arm64; do
+            local_path="./builds/$version_name/$arch/firecracker"
+            if [[ ! -f "$local_path" ]]; then
+              continue
+            fi
+
+            asset_name="firecracker-${arch}"
+
+            if echo "$existing_assets" | grep -q "^${asset_name}$"; then
+              echo "Release: $arch artifact already exists, skipping"
+            else
+              echo "Release: Uploading $arch artifact..."
+              # Create temp file with correct name
+              tmp_file=$(mktemp -d)/${asset_name}
+              cp "$local_path" "$tmp_file"
+              gh release upload "$version_name" "$tmp_file"
+              rm -f "$tmp_file"
+            fi
+
+            # Upload amd64 binary also as "firecracker" for backwards compatibility
+            if [[ "$arch" == "amd64" ]]; then
+              if echo "$existing_assets" | grep -q "^firecracker$"; then
+                echo "Release: legacy 'firecracker' artifact already exists, skipping"
+              else
+                echo "Release: Uploading legacy 'firecracker' artifact for backwards compatibility..."
+                tmp_file=$(mktemp -d)/firecracker
+                cp "$local_path" "$tmp_file"
+                gh release upload "$version_name" "$tmp_file"
+                rm -f "$tmp_file"
+              fi
+            fi
+          done
+
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$version_name"
