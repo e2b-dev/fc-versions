@@ -67,9 +67,11 @@ jobs:
             }
 
             # Handle annotated tags (need to dereference to get commit SHA)
-            object_type=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" --jq '.object.type' 2>/dev/null || echo "commit")
-            if [[ "$object_type" == "tag" ]]; then
-              commit_hash=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" --jq '.object.sha' 2>/dev/null || echo "$commit_hash")
+            # If the ref points to a tag object, we need to get the commit it points to
+            tag_object=$(gh api "repos/e2b-dev/firecracker/git/tags/$commit_hash" 2>/dev/null || echo "")
+            if [[ -n "$tag_object" ]]; then
+              # Successfully fetched tag object, extract the commit SHA it points to
+              commit_hash=$(echo "$tag_object" | jq -r '.object.sha')
             fi
           fi
 
@@ -84,6 +86,47 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "commit_hash=$commit_hash" >> "$GITHUB_OUTPUT"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Check CI status for commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit_hash="${{ steps.version.outputs.commit_hash }}"
+          echo "Checking CI status for commit $commit_hash..."
+
+          # Check commit status API
+          status_response=$(gh api "/repos/e2b-dev/firecracker/commits/$commit_hash/status" 2>/dev/null || echo '{"state":"unknown","total_count":0}')
+          status=$(echo "$status_response" | jq -r '.state')
+          status_count=$(echo "$status_response" | jq -r '.total_count')
+
+          # Check check-runs API
+          check_response=$(gh api "/repos/e2b-dev/firecracker/commits/$commit_hash/check-runs" 2>/dev/null || echo '{"total_count":0}')
+          check_count=$(echo "$check_response" | jq -r '.total_count')
+          check_conclusion=$(echo "$check_response" | jq -r '
+            if .total_count == 0 then "no_checks"
+            elif ([.check_runs[].status] | any(. == "in_progress" or . == "queued")) then "pending"
+            elif ([.check_runs[].conclusion] | any(. == "failure" or . == "cancelled" or . == "timed_out")) then "failure"
+            elif ([.check_runs[].conclusion] | all(. == "success" or . == "skipped" or . == "neutral")) then "success"
+            else "unknown"
+            end
+          ')
+
+          echo "Status API: state=$status, count=$status_count"
+          echo "Check-runs API: conclusion=$check_conclusion, count=$check_count"
+
+          if [[ "$status" == "failure" ]] || [[ "$check_conclusion" == "failure" ]]; then
+            echo "::error::CI failed for commit $commit_hash - refusing to build"
+            exit 1
+          elif [[ "$check_conclusion" == "pending" ]] || ([[ "$status" == "pending" ]] && [[ "$status_count" -gt 0 ]]); then
+            echo "::error::CI is still running for commit $commit_hash - refusing to build"
+            exit 1
+          elif [[ "$status" == "success" ]] || [[ "$check_conclusion" == "success" ]]; then
+            echo "CI passed for commit $commit_hash"
+          elif [[ "$status_count" -eq 0 ]] && [[ "$check_count" -eq 0 ]]; then
+            echo "::warning::No CI checks found for commit $commit_hash - proceeding anyway"
+          else
+            echo "::warning::Could not definitively verify CI status (status=$status, check_conclusion=$check_conclusion) - proceeding anyway"
+          fi
 
       - name: Setup GCS credentials
         uses: google-github-actions/auth@v3
@@ -154,7 +197,18 @@ jobs:
 
           # Check if nothing to do
           if [[ "$need_amd64" == "false" && "$need_arm64" == "false" ]]; then
-            echo "Nothing to do - all requested artifacts already exist in both GCS and GitHub release"
+            echo ""
+            echo "=============================================="
+            echo "SKIPPING BUILD: All requested artifacts already exist"
+            echo "=============================================="
+            echo ""
+            echo "The following artifacts were found:"
+            echo "  - GCS: gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/"
+            echo "  - GitHub Release: https://github.com/${{ github.repository }}/releases/tag/${version_name}"
+            echo ""
+            echo "To rebuild, first delete the existing artifacts from GCS and/or GitHub."
+            echo ""
+            echo "::notice::Skipped build - all requested artifacts already exist in both GCS and GitHub release"
             echo "skip_build=true" >> "$GITHUB_OUTPUT"
             echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
             exit 0
@@ -296,6 +350,19 @@ jobs:
               cp "$local_path" "$tmp_file"
               gh release upload "$version_name" "$tmp_file"
               rm -f "$tmp_file"
+            fi
+
+            # Upload amd64 binary also as "firecracker" for backwards compatibility
+            if [[ "$arch" == "amd64" ]]; then
+              if echo "$existing_assets" | grep -q "^firecracker$"; then
+                echo "Release: legacy 'firecracker' artifact already exists, skipping"
+              else
+                echo "Release: Uploading legacy 'firecracker' artifact for backwards compatibility..."
+                tmp_file=$(mktemp -d)/firecracker
+                cp "$local_path" "$tmp_file"
+                gh release upload "$version_name" "$tmp_file"
+                rm -f "$tmp_file"
+              fi
             fi
           done
 
