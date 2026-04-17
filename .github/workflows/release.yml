@@ -44,6 +44,14 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
 
+      - name: Parse .tool-versions
+        uses: wistia/parse-tool-versions@v2.1.1
+
+      - name: Install python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON }}
+
       - name: Validate inputs and resolve version
         id: validate
         env:
