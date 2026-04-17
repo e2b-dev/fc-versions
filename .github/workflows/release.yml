@@ -125,7 +125,7 @@ jobs:
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
 
       - name: Setup GCS credentials
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -224,23 +224,26 @@ jobs:
       matrix: ${{ fromJson(needs.validate.outputs.build_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: ./.github/actions/build
+      - name: Build Firecracker ${{ needs.validate.outputs.version_name }} (${{ matrix.arch }})
+        run: ./build.sh "${{ needs.validate.outputs.tag }}" "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
         with:
-          version: ${{ needs.validate.outputs.tag }}
-          hash: ${{ needs.validate.outputs.commit_hash }}
-          version_name: ${{ needs.validate.outputs.version_name }}
-          arch: ${{ matrix.arch }}
+          name: firecracker-${{ needs.validate.outputs.version_name }}-${{ matrix.arch }}
+          path: builds/
+          retention-days: 7
 
   publish:
     needs: [validate, build]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./builds
           merge-multiple: true
@@ -251,7 +254,7 @@ jobs:
           find ./builds -type f | head -50
 
       - name: Setup Service Account
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
