@@ -208,68 +208,19 @@ def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tupl
     return True, f"Could not definitively verify CI status (status={status}, check_conclusion={check_conclusion}) - proceeding anyway"
 
 
-def check_release_artifacts(github_repo: str, version_name: str) -> set[str]:
-    """Get the set of artifact names in a GitHub release."""
-    result = run_command([
-        "gh", "release", "view", version_name,
-        "--repo", github_repo,
-        "--json", "assets",
-        "-q", ".assets[].name"
-    ], check=False)
-
-    if result.returncode != 0:
-        return set()
-
-    return set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
-
-
-def check_existing_artifacts(
-    version_name: str,
-    build_amd64: bool,
-    build_arm64: bool,
-    github_repo: str
-) -> tuple[dict, bool]:
+def generate_build_matrix(build_amd64: bool, build_arm64: bool) -> dict:
     """
-    Check existing artifacts and generate build matrix.
+    Generate build matrix for all requested architectures.
 
-    Returns (build_matrix, skip_build).
+    Build and deploy jobs always run; individual steps check for existing artifacts.
     """
-    need_amd64 = False
-    need_arm64 = False
-
-    release_assets = check_release_artifacts(github_repo, version_name)
-
-    for arch, requested in [("amd64", build_amd64), ("arm64", build_arm64)]:
-        if not requested:
-            continue
-
-        release_exists = f"firecracker-{arch}" in release_assets
-
-        print(f"Release: {arch} artifact {'exists' if release_exists else 'missing'}", file=sys.stderr)
-
-        if not release_exists:
-            if arch == "amd64":
-                need_amd64 = True
-            else:
-                need_arm64 = True
-
-    if not need_amd64 and not need_arm64:
-        print("", file=sys.stderr)
-        print("==============================================", file=sys.stderr)
-        print("SKIPPING BUILD: All requested artifacts already exist", file=sys.stderr)
-        print("==============================================", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("::notice::Skipped build - all requested artifacts already exist in GitHub release", file=sys.stderr)
-        return {"include": []}, True
-
-    # Generate build matrix
     include = []
-    if need_amd64:
+    if build_amd64:
         include.append({"arch": "amd64", "runner": "ubuntu-24.04"})
-    if need_arm64:
+    if build_arm64:
         include.append({"arch": "arm64", "runner": "ubuntu-24.04-arm"})
 
-    return {"include": include}, False
+    return {"include": include}
 
 
 def write_github_output(outputs: dict[str, str]) -> None:
@@ -334,13 +285,8 @@ def main() -> int:
         return 1
     print(ci_message, file=sys.stderr)
 
-    # Step 4: Check existing artifacts and generate build matrix
-    build_matrix, skip_build = check_existing_artifacts(
-        version_name,
-        args.build_amd64,
-        args.build_arm64,
-        args.github_repo
-    )
+    # Step 4: Generate build matrix for all requested architectures
+    build_matrix = generate_build_matrix(args.build_amd64, args.build_arm64)
 
     print(f"Build matrix: {json.dumps(build_matrix)}", file=sys.stderr)
 
@@ -349,7 +295,6 @@ def main() -> int:
         "commit_hash": commit_hash,
         "version_name": version_name,
         "build_matrix": json.dumps(build_matrix),
-        "skip_build": "true" if skip_build else "false"
     })
 
     return 0

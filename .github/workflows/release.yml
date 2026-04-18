@@ -33,7 +33,6 @@ jobs:
       version_name: ${{ steps.validate.outputs.version_name }}
       commit_hash: ${{ steps.validate.outputs.commit_hash }}
       build_matrix: ${{ steps.validate.outputs.build_matrix }}
-      skip_build: ${{ steps.validate.outputs.skip_build }}
     steps:
       - uses: actions/checkout@v6
 
@@ -59,7 +58,6 @@ jobs:
 
   build:
     needs: validate
-    if: needs.validate.outputs.skip_build != 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.validate.outputs.build_matrix) }}
@@ -67,10 +65,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Check if artifact exists in release
+        id: check_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version_name="${{ needs.validate.outputs.version_name }}"
+          arch="${{ matrix.arch }}"
+          asset_name="firecracker-${arch}"
+
+          if gh release view "$version_name" --json assets -q ".assets[].name" 2>/dev/null | grep -q "^${asset_name}$"; then
+            echo "Release: $arch artifact already exists, skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Release: $arch artifact missing, will build"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Firecracker ${{ needs.validate.outputs.version_name }} (${{ matrix.arch }})
+        if: steps.check_release.outputs.skip != 'true'
         run: ./build.sh "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
 
       - name: Upload build artifact
+        if: steps.check_release.outputs.skip != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: firecracker-${{ needs.validate.outputs.version_name }}-${{ matrix.arch }}
@@ -79,7 +96,6 @@ jobs:
 
   publish:
     needs: [validate, build]
-    if: needs.validate.outputs.skip_build != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -165,7 +181,6 @@ jobs:
 
   deploy:
     needs: [validate, publish]
-    if: needs.validate.outputs.skip_build != 'true'
     strategy:
       fail-fast: false
       matrix:

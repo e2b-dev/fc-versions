@@ -14,7 +14,7 @@ from validate import (
     find_tag_for_commit,
     resolve_tag_and_commit,
     check_ci_status,
-    check_existing_artifacts,
+    generate_build_matrix,
     gh_api,
 )
 
@@ -354,55 +354,31 @@ class TestCheckCIStatus:
             assert success is True
 
 
-class TestCheckExistingArtifacts:
-    """Tests for check_existing_artifacts function."""
+class TestGenerateBuildMatrix:
+    """Tests for generate_build_matrix function."""
 
-    def test_all_artifacts_exist_skip_build(self):
-        """Test when all artifacts exist in release."""
-        with patch("validate.check_release_artifacts", return_value={"firecracker-amd64", "firecracker-arm64"}):
-            matrix, skip = check_existing_artifacts(
-                "v1.0.0_abc1234", True, True, "owner/repo"
-            )
-            assert skip is True
-            assert matrix == {"include": []}
+    def test_build_both_architectures(self):
+        """Test generating matrix for both architectures."""
+        matrix = generate_build_matrix(True, True)
+        assert len(matrix["include"]) == 2
+        archs = {item["arch"] for item in matrix["include"]}
+        assert archs == {"amd64", "arm64"}
 
-    def test_no_artifacts_exist_build_both(self):
-        """Test when no artifacts exist."""
-        with patch("validate.check_release_artifacts", return_value=set()):
-            matrix, skip = check_existing_artifacts(
-                "v1.0.0_abc1234", True, True, "owner/repo"
-            )
-            assert skip is False
-            assert len(matrix["include"]) == 2
-            archs = {item["arch"] for item in matrix["include"]}
-            assert archs == {"amd64", "arm64"}
+    def test_build_amd64_only(self):
+        """Test generating matrix for amd64 only."""
+        matrix = generate_build_matrix(True, False)
+        assert len(matrix["include"]) == 1
+        assert matrix["include"][0]["arch"] == "amd64"
+        assert matrix["include"][0]["runner"] == "ubuntu-24.04"
 
-    def test_only_amd64_missing(self):
-        """Test when only amd64 is missing."""
-        with patch("validate.check_release_artifacts", return_value={"firecracker-arm64"}):
-            matrix, skip = check_existing_artifacts(
-                "v1.0.0_abc1234", True, True, "owner/repo"
-            )
-            assert skip is False
-            assert len(matrix["include"]) == 1
-            assert matrix["include"][0]["arch"] == "amd64"
+    def test_build_arm64_only(self):
+        """Test generating matrix for arm64 only."""
+        matrix = generate_build_matrix(False, True)
+        assert len(matrix["include"]) == 1
+        assert matrix["include"][0]["arch"] == "arm64"
+        assert matrix["include"][0]["runner"] == "ubuntu-24.04-arm"
 
-    def test_only_arm64_requested_and_missing(self):
-        """Test when only arm64 is requested and missing."""
-        with patch("validate.check_release_artifacts", return_value=set()):
-            matrix, skip = check_existing_artifacts(
-                "v1.0.0_abc1234", False, True, "owner/repo"
-            )
-            assert skip is False
-            assert len(matrix["include"]) == 1
-            assert matrix["include"][0]["arch"] == "arm64"
-            assert matrix["include"][0]["runner"] == "ubuntu-24.04-arm"
-
-    def test_amd64_exists_in_release(self):
-        """Test when amd64 exists in release (skip build for amd64)."""
-        with patch("validate.check_release_artifacts", return_value={"firecracker-amd64"}):
-            matrix, skip = check_existing_artifacts(
-                "v1.0.0_abc1234", True, False, "owner/repo"
-            )
-            assert skip is True
-            assert matrix == {"include": []}
+    def test_build_neither_architecture(self):
+        """Test generating empty matrix when no architectures requested."""
+        matrix = generate_build_matrix(False, False)
+        assert matrix == {"include": []}
