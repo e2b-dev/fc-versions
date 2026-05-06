@@ -208,68 +208,55 @@ def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tupl
     return True, f"Could not definitively verify CI status (status={status}, check_conclusion={check_conclusion}) - proceeding anyway"
 
 
-def check_release_artifacts(github_repo: str, version_name: str) -> set[str]:
-    """Get the set of artifact names in a GitHub release."""
-    result = run_command([
-        "gh", "release", "view", version_name,
-        "--repo", github_repo,
-        "--json", "assets",
-        "-q", ".assets[].name"
-    ], check=False)
+def get_existing_release_assets(version_name: str) -> set[str]:
+    """
+    Get the set of existing asset names for a release.
 
+    Returns empty set if release doesn't exist.
+    """
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo:
+        return set()
+
+    result = run_command(
+        ["gh", "release", "view", version_name, "--json", "assets", "-q", ".assets[].name"],
+        check=False
+    )
     if result.returncode != 0:
         return set()
 
     return set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
 
 
-def check_existing_artifacts(
-    version_name: str,
-    build_amd64: bool,
-    build_arm64: bool,
-    github_repo: str
-) -> tuple[dict, bool]:
+def check_artifacts_needed(version_name: str, build_amd64: bool, build_arm64: bool) -> bool:
     """
-    Check existing artifacts and generate build matrix.
+    Check if any requested architectures are missing from the release.
 
-    Returns (build_matrix, skip_build).
+    Returns True if at least one artifact needs to be built and uploaded.
     """
-    need_amd64 = False
-    need_arm64 = False
+    existing_assets = get_existing_release_assets(version_name)
 
-    release_assets = check_release_artifacts(github_repo, version_name)
+    if build_amd64 and "firecracker-amd64" not in existing_assets:
+        return True
+    if build_arm64 and "firecracker-arm64" not in existing_assets:
+        return True
 
-    for arch, requested in [("amd64", build_amd64), ("arm64", build_arm64)]:
-        if not requested:
-            continue
+    return False
 
-        release_exists = f"firecracker-{arch}" in release_assets
 
-        print(f"Release: {arch} artifact {'exists' if release_exists else 'missing'}", file=sys.stderr)
+def generate_build_matrix(build_amd64: bool, build_arm64: bool) -> dict:
+    """
+    Generate build matrix for all requested architectures.
 
-        if not release_exists:
-            if arch == "amd64":
-                need_amd64 = True
-            else:
-                need_arm64 = True
-
-    if not need_amd64 and not need_arm64:
-        print("", file=sys.stderr)
-        print("==============================================", file=sys.stderr)
-        print("SKIPPING BUILD: All requested artifacts already exist", file=sys.stderr)
-        print("==============================================", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("::notice::Skipped build - all requested artifacts already exist in GitHub release", file=sys.stderr)
-        return {"include": []}, True
-
-    # Generate build matrix
+    Build and deploy jobs always run; individual steps check for existing artifacts.
+    """
     include = []
-    if need_amd64:
+    if build_amd64:
         include.append({"arch": "amd64", "runner": "ubuntu-24.04"})
-    if need_arm64:
+    if build_arm64:
         include.append({"arch": "arm64", "runner": "ubuntu-24.04-arm"})
 
-    return {"include": include}, False
+    return {"include": include}
 
 
 def write_github_output(outputs: dict[str, str]) -> None:
@@ -293,8 +280,6 @@ def main() -> int:
                         help="Build for amd64 architecture")
     parser.add_argument("--build-arm64", type=lambda x: x.lower() == "true", default=True,
                         help="Build for arm64 architecture")
-    parser.add_argument("--github-repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
-                        help="GitHub repository (owner/repo)")
 
     args = parser.parse_args()
 
@@ -334,22 +319,21 @@ def main() -> int:
         return 1
     print(ci_message, file=sys.stderr)
 
-    # Step 4: Check existing artifacts and generate build matrix
-    build_matrix, skip_build = check_existing_artifacts(
-        version_name,
-        args.build_amd64,
-        args.build_arm64,
-        args.github_repo
-    )
+    # Step 4: Generate build matrix for all requested architectures
+    build_matrix = generate_build_matrix(args.build_amd64, args.build_arm64)
 
     print(f"Build matrix: {json.dumps(build_matrix)}", file=sys.stderr)
+
+    # Step 5: Check if any artifacts need to be built
+    has_new_artifacts = check_artifacts_needed(version_name, args.build_amd64, args.build_arm64)
+    print(f"Has new artifacts to build: {has_new_artifacts}", file=sys.stderr)
 
     # Write outputs
     write_github_output({
         "commit_hash": commit_hash,
         "version_name": version_name,
         "build_matrix": json.dumps(build_matrix),
-        "skip_build": "true" if skip_build else "false"
+        "has_new_artifacts": str(has_new_artifacts).lower(),
     })
 
     return 0
