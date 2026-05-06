@@ -244,8 +244,6 @@ def main() -> int:
                         help="Build for amd64 architecture")
     parser.add_argument("--build-arm64", type=lambda x: x.lower() == "true", default=True,
                         help="Build for arm64 architecture")
-    parser.add_argument("--github-repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
-                        help="GitHub repository (owner/repo)")
 
     args = parser.parse_args()
 

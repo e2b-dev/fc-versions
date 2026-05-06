@@ -56,6 +56,7 @@ jobs:
             --build-amd64 "${{ inputs.build_amd64 }}" \
             --build-arm64 "${{ inputs.build_arm64 }}"
 
+
   build:
     needs: validate
     strategy:
@@ -178,6 +179,7 @@ jobs:
           done
 
           echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$version_name"
+
 
   deploy:
     needs: [validate, publish]

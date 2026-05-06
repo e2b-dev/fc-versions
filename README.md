@@ -8,9 +8,12 @@ This project automates the building of custom Firecracker versions. It supports 
 
 - Linux environment (for building firecracker)
 
-## Building Firecrackers
+## Releasing Firecrackers
 
-Run the `release.yml` GitHub Actions workflow (Actions → Manual Build & Release → Run workflow) to build and upload Firecracker binaries.
+1. Run the `release.yml` GitHub Actions workflow (Actions → Manual Build & Release → Run workflow) to build and upload Firecracker binaries.
+2. Create a new variation for the `firecracker-versions` feature flag to point a subset of users to the new firecracker version.
+3. After testing, promote the new variation to all users.
+4. Once the new variation is confirmed to be stable, update the DefaultFirecrackerV___Version constant in github.com/e2b-dev/infra, packages/shared/pkg/featureflags/flags.go.
 
 ### Workflow Inputs
 
