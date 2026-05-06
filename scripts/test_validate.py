@@ -15,6 +15,8 @@ from validate import (
     resolve_tag_and_commit,
     check_ci_status,
     generate_build_matrix,
+    get_existing_release_assets,
+    check_artifacts_needed,
     gh_api,
 )
 
@@ -382,3 +384,90 @@ class TestGenerateBuildMatrix:
         """Test generating empty matrix when no architectures requested."""
         matrix = generate_build_matrix(False, False)
         assert matrix == {"include": []}
+
+
+class TestGetExistingReleaseAssets:
+    """Tests for get_existing_release_assets function."""
+
+    def test_no_github_repository_env(self):
+        """Test returns empty set when GITHUB_REPOSITORY is not set."""
+        with patch.dict("os.environ", {}, clear=True):
+            assets = get_existing_release_assets("v1.0.0_abc1234")
+            assert assets == set()
+
+    def test_release_not_found(self):
+        """Test returns empty set when release doesn't exist."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}):
+            with patch("validate.run_command") as mock_run:
+                mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="release not found")
+                assets = get_existing_release_assets("v1.0.0_abc1234")
+                assert assets == set()
+
+    def test_release_with_assets(self):
+        """Test returns set of asset names when release exists."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}):
+            with patch("validate.run_command") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout="firecracker-amd64\nfirecracker-arm64\nfirecracker\n",
+                    stderr=""
+                )
+                assets = get_existing_release_assets("v1.0.0_abc1234")
+                assert assets == {"firecracker-amd64", "firecracker-arm64", "firecracker"}
+
+    def test_release_with_no_assets(self):
+        """Test returns empty set when release exists but has no assets."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}):
+            with patch("validate.run_command") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+                assets = get_existing_release_assets("v1.0.0_abc1234")
+                assert assets == set()
+
+
+class TestCheckArtifactsNeeded:
+    """Tests for check_artifacts_needed function."""
+
+    def test_both_requested_neither_exists(self):
+        """Test returns True when both requested and neither exists."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
+    def test_both_requested_amd64_missing(self):
+        """Test returns True when both requested but amd64 is missing."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
+    def test_both_requested_arm64_missing(self):
+        """Test returns True when both requested but arm64 is missing."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
+    def test_both_requested_both_exist(self):
+        """Test returns False when both requested and both exist."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64", "firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is False
+
+    def test_amd64_only_exists(self):
+        """Test returns False when only amd64 requested and it exists."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, False) is False
+
+    def test_amd64_only_missing(self):
+        """Test returns True when only amd64 requested and it's missing."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, False) is True
+
+    def test_arm64_only_exists(self):
+        """Test returns False when only arm64 requested and it exists."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", False, True) is False
+
+    def test_arm64_only_missing(self):
+        """Test returns True when only arm64 requested and it's missing."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", False, True) is True
+
+    def test_neither_requested(self):
+        """Test returns False when no architectures are requested."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", False, False) is False
