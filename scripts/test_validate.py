@@ -14,7 +14,9 @@ from validate import (
     find_tag_for_commit,
     resolve_tag_and_commit,
     check_ci_status,
-    check_existing_artifacts,
+    generate_build_matrix,
+    get_existing_release_assets,
+    check_artifacts_needed,
     gh_api,
 )
 
@@ -354,62 +356,118 @@ class TestCheckCIStatus:
             assert success is True
 
 
-class TestCheckExistingArtifacts:
-    """Tests for check_existing_artifacts function."""
+class TestGenerateBuildMatrix:
+    """Tests for generate_build_matrix function."""
 
-    def test_all_artifacts_exist_skip_build(self):
-        """Test when all artifacts exist in both GCS and release."""
-        with patch("validate.check_release_artifacts", return_value={"firecracker-amd64", "firecracker-arm64"}):
-            with patch("validate.check_gcs_artifact", return_value=True):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, True, "my-bucket", "owner/repo"
-                )
-                assert skip is True
-                assert matrix == {"include": []}
+    def test_build_both_architectures(self):
+        """Test generating matrix for both architectures."""
+        matrix = generate_build_matrix(True, True)
+        assert len(matrix["include"]) == 2
+        archs = {item["arch"] for item in matrix["include"]}
+        assert archs == {"amd64", "arm64"}
 
-    def test_no_artifacts_exist_build_both(self):
-        """Test when no artifacts exist."""
-        with patch("validate.check_release_artifacts", return_value=set()):
-            with patch("validate.check_gcs_artifact", return_value=False):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, True, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 2
-                archs = {item["arch"] for item in matrix["include"]}
-                assert archs == {"amd64", "arm64"}
+    def test_build_amd64_only(self):
+        """Test generating matrix for amd64 only."""
+        matrix = generate_build_matrix(True, False)
+        assert len(matrix["include"]) == 1
+        assert matrix["include"][0]["arch"] == "amd64"
+        assert matrix["include"][0]["runner"] == "ubuntu-24.04"
 
-    def test_only_amd64_missing(self):
-        """Test when only amd64 is missing."""
-        with patch("validate.check_release_artifacts", return_value={"firecracker-arm64"}):
-            with patch("validate.check_gcs_artifact") as mock_gcs:
-                mock_gcs.side_effect = lambda bucket, version, arch: arch == "arm64"
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, True, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 1
-                assert matrix["include"][0]["arch"] == "amd64"
+    def test_build_arm64_only(self):
+        """Test generating matrix for arm64 only."""
+        matrix = generate_build_matrix(False, True)
+        assert len(matrix["include"]) == 1
+        assert matrix["include"][0]["arch"] == "arm64"
+        assert matrix["include"][0]["runner"] == "ubuntu-24.04-arm"
 
-    def test_only_arm64_requested_and_missing(self):
-        """Test when only arm64 is requested and missing."""
-        with patch("validate.check_release_artifacts", return_value=set()):
-            with patch("validate.check_gcs_artifact", return_value=False):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", False, True, "my-bucket", "owner/repo"
-                )
-                assert skip is False
-                assert len(matrix["include"]) == 1
-                assert matrix["include"][0]["arch"] == "arm64"
-                assert matrix["include"][0]["runner"] == "ubuntu-24.04-arm"
+    def test_build_neither_architecture(self):
+        """Test generating empty matrix when no architectures requested."""
+        matrix = generate_build_matrix(False, False)
+        assert matrix == {"include": []}
 
-    def test_gcs_missing_but_release_exists(self):
-        """Test when GCS is missing but release exists (still needs build)."""
-        with patch("validate.check_release_artifacts", return_value={"firecracker-amd64"}):
-            with patch("validate.check_gcs_artifact", return_value=False):
-                matrix, skip = check_existing_artifacts(
-                    "v1.0.0_abc1234", True, False, "my-bucket", "owner/repo"
+
+class TestGetExistingReleaseAssets:
+    """Tests for get_existing_release_assets function."""
+
+    def test_no_github_repository_env(self):
+        """Test returns empty set when GITHUB_REPOSITORY is not set."""
+        with patch.dict("os.environ", {}, clear=True):
+            assets = get_existing_release_assets("v1.0.0_abc1234")
+            assert assets == set()
+
+    def test_release_not_found(self):
+        """Test returns empty set when release doesn't exist."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}):
+            with patch("validate.run_command") as mock_run:
+                mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="release not found")
+                assets = get_existing_release_assets("v1.0.0_abc1234")
+                assert assets == set()
+
+    def test_release_with_assets(self):
+        """Test returns set of asset names when release exists."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}):
+            with patch("validate.run_command") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout="firecracker-amd64\nfirecracker-arm64\nfirecracker\n",
+                    stderr=""
                 )
-                assert skip is False
-                assert len(matrix["include"]) == 1
-                assert matrix["include"][0]["arch"] == "amd64"
+                assets = get_existing_release_assets("v1.0.0_abc1234")
+                assert assets == {"firecracker-amd64", "firecracker-arm64", "firecracker"}
+
+    def test_release_with_no_assets(self):
+        """Test returns empty set when release exists but has no assets."""
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}):
+            with patch("validate.run_command") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+                assets = get_existing_release_assets("v1.0.0_abc1234")
+                assert assets == set()
+
+
+class TestCheckArtifactsNeeded:
+    """Tests for check_artifacts_needed function."""
+
+    def test_both_requested_neither_exists(self):
+        """Test returns True when both requested and neither exists."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
+    def test_both_requested_amd64_missing(self):
+        """Test returns True when both requested but amd64 is missing."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
+    def test_both_requested_arm64_missing(self):
+        """Test returns True when both requested but arm64 is missing."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
+    def test_both_requested_both_exist(self):
+        """Test returns False when both requested and both exist."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64", "firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is False
+
+    def test_amd64_only_exists(self):
+        """Test returns False when only amd64 requested and it exists."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, False) is False
+
+    def test_amd64_only_missing(self):
+        """Test returns True when only amd64 requested and it's missing."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, False) is True
+
+    def test_arm64_only_exists(self):
+        """Test returns False when only arm64 requested and it exists."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", False, True) is False
+
+    def test_arm64_only_missing(self):
+        """Test returns True when only arm64 requested and it's missing."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", False, True) is True
+
+    def test_neither_requested(self):
+        """Test returns False when no architectures are requested."""
+        with patch("validate.get_existing_release_assets", return_value=set()):
+            assert check_artifacts_needed("v1.0.0_abc1234", False, False) is False

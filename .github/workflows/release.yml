@@ -33,15 +33,9 @@ jobs:
       version_name: ${{ steps.validate.outputs.version_name }}
       commit_hash: ${{ steps.validate.outputs.commit_hash }}
       build_matrix: ${{ steps.validate.outputs.build_matrix }}
-      skip_build: ${{ steps.validate.outputs.skip_build }}
+      has_new_artifacts: ${{ steps.validate.outputs.has_new_artifacts }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Setup GCS credentials
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
 
       - name: Parse .tool-versions
         uses: wistia/parse-tool-versions@v2.1.1
@@ -55,7 +49,6 @@ jobs:
         id: validate
         env:
           GH_TOKEN: ${{ github.token }}
-          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python3 scripts/validate.py \
@@ -64,9 +57,9 @@ jobs:
             --build-amd64 "${{ inputs.build_amd64 }}" \
             --build-arm64 "${{ inputs.build_arm64 }}"
 
+
   build:
     needs: validate
-    if: needs.validate.outputs.skip_build != 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.validate.outputs.build_matrix) }}
@@ -74,10 +67,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Check if artifact exists in release
+        id: check_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version_name="${{ needs.validate.outputs.version_name }}"
+          arch="${{ matrix.arch }}"
+          asset_name="firecracker-${arch}"
+
+          if gh release view "$version_name" --json assets -q ".assets[].name" 2>/dev/null | grep -q "^${asset_name}$"; then
+            echo "Release: $arch artifact already exists, skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Release: $arch artifact missing, will build"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build Firecracker ${{ needs.validate.outputs.version_name }} (${{ matrix.arch }})
+        if: steps.check_release.outputs.skip != 'true'
         run: ./build.sh "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
 
       - name: Upload build artifact
+        if: steps.check_release.outputs.skip != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: firecracker-${{ needs.validate.outputs.version_name }}-${{ matrix.arch }}
@@ -86,7 +98,6 @@ jobs:
 
   publish:
     needs: [validate, build]
-    if: needs.validate.outputs.skip_build != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -94,43 +105,17 @@ jobs:
           fetch-depth: 0
 
       - name: Download all build artifacts
+        if: needs.validate.outputs.has_new_artifacts == 'true'
         uses: actions/download-artifact@v8
         with:
           path: ./builds
           merge-multiple: true
 
       - name: Display build artifacts
+        if: needs.validate.outputs.has_new_artifacts == 'true'
         run: |
           echo "Build artifacts:"
           find ./builds -type f | head -50
-
-      - name: Setup Service Account
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-
-      - name: Upload to GCS (skip existing)
-        env:
-          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
-        run: |
-          version_name="${{ needs.validate.outputs.version_name }}"
-
-          for arch in amd64 arm64; do
-            local_path="./builds/$version_name/$arch/firecracker"
-            if [[ ! -f "$local_path" ]]; then
-              continue
-            fi
-
-            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
-
-            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
-              echo "GCS: $arch artifact already exists, skipping"
-            else
-              echo "GCS: Uploading $arch artifact..."
-              gcloud storage cp "$local_path" "$gcs_path"
-            fi
-          done
 
       - name: Create or update GitHub release (skip existing artifacts)
         env:
@@ -197,3 +182,55 @@ jobs:
           done
 
           echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$version_name"
+
+
+  deploy:
+    needs: [validate, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, juliett, foxtrot]
+    runs-on: ubuntu-24.04
+    environment: ${{ matrix.environment }}
+    steps:
+      - name: Setup GCS credentials
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version_name="${{ needs.validate.outputs.version_name }}"
+
+          for arch in amd64 arm64; do
+            asset_name="firecracker-${arch}"
+            mkdir -p ./builds/$version_name/$arch
+            gh release download "$version_name" \
+              --repo "${{ github.repository }}" \
+              --pattern "$asset_name" \
+              --output "./builds/$version_name/$arch/firecracker" 2>/dev/null || true
+          done
+
+      - name: Upload to GCS
+        env:
+          GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_NAME }}
+        run: |
+          version_name="${{ needs.validate.outputs.version_name }}"
+
+          for arch in amd64 arm64; do
+            local_path="./builds/$version_name/$arch/firecracker"
+            [[ -f "$local_path" ]] || continue
+
+            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
+
+            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
+              echo "GCS (${{ matrix.environment }}): $arch already exists, skipping"
+            else
+              echo "GCS (${{ matrix.environment }}): Uploading $arch..."
+              gcloud storage cp "$local_path" "$gcs_path"
+            fi
+          done
