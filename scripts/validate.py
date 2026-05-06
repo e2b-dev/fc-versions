@@ -208,6 +208,42 @@ def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tupl
     return True, f"Could not definitively verify CI status (status={status}, check_conclusion={check_conclusion}) - proceeding anyway"
 
 
+def get_existing_release_assets(version_name: str) -> set[str]:
+    """
+    Get the set of existing asset names for a release.
+
+    Returns empty set if release doesn't exist.
+    """
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo:
+        return set()
+
+    result = run_command(
+        ["gh", "release", "view", version_name, "--json", "assets", "-q", ".assets[].name"],
+        check=False
+    )
+    if result.returncode != 0:
+        return set()
+
+    return set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
+
+
+def check_artifacts_needed(version_name: str, build_amd64: bool, build_arm64: bool) -> bool:
+    """
+    Check if any requested architectures are missing from the release.
+
+    Returns True if at least one artifact needs to be built and uploaded.
+    """
+    existing_assets = get_existing_release_assets(version_name)
+
+    if build_amd64 and "firecracker-amd64" not in existing_assets:
+        return True
+    if build_arm64 and "firecracker-arm64" not in existing_assets:
+        return True
+
+    return False
+
+
 def generate_build_matrix(build_amd64: bool, build_arm64: bool) -> dict:
     """
     Generate build matrix for all requested architectures.
@@ -288,11 +324,16 @@ def main() -> int:
 
     print(f"Build matrix: {json.dumps(build_matrix)}", file=sys.stderr)
 
+    # Step 5: Check if any artifacts need to be built
+    has_new_artifacts = check_artifacts_needed(version_name, args.build_amd64, args.build_arm64)
+    print(f"Has new artifacts to build: {has_new_artifacts}", file=sys.stderr)
+
     # Write outputs
     write_github_output({
         "commit_hash": commit_hash,
         "version_name": version_name,
         "build_matrix": json.dumps(build_matrix),
+        "has_new_artifacts": str(has_new_artifacts).lower(),
     })
 
     return 0

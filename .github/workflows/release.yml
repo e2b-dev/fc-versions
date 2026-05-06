@@ -33,6 +33,7 @@ jobs:
       version_name: ${{ steps.validate.outputs.version_name }}
       commit_hash: ${{ steps.validate.outputs.commit_hash }}
       build_matrix: ${{ steps.validate.outputs.build_matrix }}
+      has_new_artifacts: ${{ steps.validate.outputs.has_new_artifacts }}
     steps:
       - uses: actions/checkout@v6
 
@@ -104,12 +105,14 @@ jobs:
           fetch-depth: 0
 
       - name: Download all build artifacts
+        if: needs.validate.outputs.has_new_artifacts == 'true'
         uses: actions/download-artifact@v8
         with:
           path: ./builds
           merge-multiple: true
 
       - name: Display build artifacts
+        if: needs.validate.outputs.has_new_artifacts == 'true'
         run: |
           echo "Build artifacts:"
           find ./builds -type f | head -50
