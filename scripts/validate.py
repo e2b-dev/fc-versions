@@ -154,27 +154,88 @@ def resolve_tag_and_commit(
     return "", "", "Either tag or commit_hash must be provided"
 
 
+# IGNORED_STATUS_CONTEXTS lists legacy commit-status contexts that should not
+# block a release build even when failing. Keep the set tiny and well-justified.
+#
+# verification/cla-signed: cla-bot fails on the upstream firecracker fork
+# whenever a backport branch carries commits authored by upstream maintainers
+# we don't have a CLA for (e.g. ilstam, ShadowCurse, JackThomson2). Those
+# contributors won't ever sign our CLA, so the status is permanently red on
+# every direct-mem / hint backport branch — we still want to ship those builds.
+IGNORED_STATUS_CONTEXTS = frozenset({"verification/cla-signed"})
+
+# IGNORED_CHECK_NAMES is the equivalent for the Checks API (apps that file a
+# check-run rather than a legacy status). Empty today; mirror IGNORED_STATUS_CONTEXTS
+# if a check-run-based bot ever ends up in the same situation.
+IGNORED_CHECK_NAMES = frozenset()
+
+
+def _rollup_status(statuses: list[dict]) -> tuple[str, int]:
+    """Compute (state, count) over the statuses list, mirroring how GitHub's
+    combined-status endpoint rolls up: any failure → failure, else any pending
+    → pending, else any success → success, else unknown.
+    """
+    if not statuses:
+        return "unknown", 0
+    states = {s.get("state") for s in statuses}
+    if "failure" in states or "error" in states:
+        return "failure", len(statuses)
+    if "pending" in states:
+        return "pending", len(statuses)
+    if "success" in states:
+        return "success", len(statuses)
+    return "unknown", len(statuses)
+
+
 def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[bool, str]:
     """
     Check CI status for a commit.
 
     Returns (success, message).
     """
-    # Check commit status API
+    # Check commit status API. Filter out IGNORED_STATUS_CONTEXTS and recompute
+    # the rollup so a single permanently-red status (e.g. cla-bot on
+    # external-contributor backport branches) doesn't block release builds.
     status_response = gh_api(f"/repos/{repo}/commits/{commit_hash}/status")
     if not status_response:
-        status_response = {"state": "unknown", "total_count": 0}
+        status_response = {"state": "unknown", "total_count": 0, "statuses": []}
 
-    status = status_response.get("state", "unknown")
-    status_count = status_response.get("total_count", 0)
+    raw_statuses = status_response.get("statuses", []) or []
+    ignored_status_contexts = [
+        s.get("context") for s in raw_statuses
+        if s.get("context") in IGNORED_STATUS_CONTEXTS
+    ]
+    filtered_statuses = [
+        s for s in raw_statuses
+        if s.get("context") not in IGNORED_STATUS_CONTEXTS
+    ]
+    if ignored_status_contexts:
+        status, status_count = _rollup_status(filtered_statuses)
+        print(
+            f"Status API: ignoring contexts {sorted(set(ignored_status_contexts))} "
+            f"→ rollup state={status}, count={status_count}",
+            file=sys.stderr,
+        )
+    else:
+        status = status_response.get("state", "unknown")
+        status_count = status_response.get("total_count", 0)
+        print(f"Status API: state={status}, count={status_count}", file=sys.stderr)
 
-    # Check check-runs API
+    # Check check-runs API. Same filter for IGNORED_CHECK_NAMES.
     check_response = gh_api(f"/repos/{repo}/commits/{commit_hash}/check-runs")
     if not check_response:
         check_response = {"total_count": 0, "check_runs": []}
 
-    check_count = check_response.get("total_count", 0)
-    check_runs = check_response.get("check_runs", [])
+    raw_check_runs = check_response.get("check_runs", []) or []
+    ignored_check_names = [
+        cr.get("name") for cr in raw_check_runs
+        if cr.get("name") in IGNORED_CHECK_NAMES
+    ]
+    check_runs = [
+        cr for cr in raw_check_runs
+        if cr.get("name") not in IGNORED_CHECK_NAMES
+    ]
+    check_count = len(check_runs)
 
     # Determine check conclusion
     if check_count == 0:
@@ -188,8 +249,14 @@ def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tupl
     else:
         check_conclusion = "unknown"
 
-    print(f"Status API: state={status}, count={status_count}", file=sys.stderr)
-    print(f"Check-runs API: conclusion={check_conclusion}, count={check_count}", file=sys.stderr)
+    if ignored_check_names:
+        print(
+            f"Check-runs API: ignoring {sorted(set(ignored_check_names))} "
+            f"→ conclusion={check_conclusion}, count={check_count}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Check-runs API: conclusion={check_conclusion}, count={check_count}", file=sys.stderr)
 
     if status == "failure" or check_conclusion == "failure":
         return False, f"CI failed for commit {commit_hash} - refusing to build"
