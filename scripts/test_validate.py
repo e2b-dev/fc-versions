@@ -355,6 +355,62 @@ class TestCheckCIStatus:
             success, message = check_ci_status(SAMPLE_COMMIT_SHA)
             assert success is True
 
+    def test_ci_ignored_cla_status_does_not_block(self):
+        """cla-bot's verification/cla-signed status is permanently red on
+        external-contributor backport branches; filtering it out should let
+        the build proceed when it's the only failure."""
+        with patch("validate.gh_api") as mock_api:
+            mock_api.side_effect = [
+                {
+                    "state": "failure",
+                    "total_count": 2,
+                    "statuses": [
+                        {"context": "verification/cla-signed", "state": "error"},
+                        {"context": "buildkite/firecracker", "state": "success"},
+                    ],
+                },
+                {"total_count": 0, "check_runs": []},
+            ]
+            success, message = check_ci_status(SAMPLE_COMMIT_SHA)
+            assert success is True
+            assert "passed" in message
+
+    def test_ci_ignored_cla_status_alone_falls_through(self):
+        """If the CLA status is the only one and we filter it out, the
+        rollup is empty → fall back to the no-checks 'proceed anyway' path."""
+        with patch("validate.gh_api") as mock_api:
+            mock_api.side_effect = [
+                {
+                    "state": "failure",
+                    "total_count": 1,
+                    "statuses": [
+                        {"context": "verification/cla-signed", "state": "error"},
+                    ],
+                },
+                {"total_count": 0, "check_runs": []},
+            ]
+            success, message = check_ci_status(SAMPLE_COMMIT_SHA)
+            assert success is True
+
+    def test_ci_other_failure_still_blocks_when_cla_also_failed(self):
+        """Real CI failure must still block even when the CLA status is also
+        failing — the filter must not mask non-ignored failures."""
+        with patch("validate.gh_api") as mock_api:
+            mock_api.side_effect = [
+                {
+                    "state": "failure",
+                    "total_count": 2,
+                    "statuses": [
+                        {"context": "verification/cla-signed", "state": "error"},
+                        {"context": "buildkite/firecracker", "state": "failure"},
+                    ],
+                },
+                {"total_count": 0, "check_runs": []},
+            ]
+            success, message = check_ci_status(SAMPLE_COMMIT_SHA)
+            assert success is False
+            assert "failed" in message
+
 
 class TestGenerateBuildMatrix:
     """Tests for generate_build_matrix function."""
