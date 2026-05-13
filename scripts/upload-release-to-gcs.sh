@@ -2,7 +2,6 @@
 # Uploads firecracker-{amd64,arm64} assets from a fc-versions GitHub release
 # to GCS at:
 #   <bucket>/<version_name>/<arch>/firecracker
-#   <bucket>/<version_name>/firecracker        (legacy amd64 copy)
 #
 # Existing objects are never overwritten.
 #
@@ -78,8 +77,6 @@ for asset in "${ASSETS[@]}"; do
   if [[ "$asset" =~ ^firecracker-(amd64|arm64)$ ]]; then
     arch="${BASH_REMATCH[1]}"
     dst="${BUCKET_URI}/${TAG}/${arch}/firecracker"
-  elif [[ "$asset" == "firecracker" ]]; then
-    dst="${BUCKET_URI}/${TAG}/firecracker"
   else
     continue
   fi
