@@ -25,7 +25,19 @@ def run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProce
 
 def gh_api(endpoint: str) -> Optional[dict]:
     """Call the GitHub API using the gh CLI."""
-    result = run_command(["gh", "api", endpoint], check=False)
+    # Route firecracker-repo calls through the App token when present, so
+    # they don't inherit GH_TOKEN, which is scoped to the current repo.
+    env = os.environ.copy()
+    firecracker_token = env.get("FIRECRACKER_GH_TOKEN")
+    if firecracker_token:
+        env["GH_TOKEN"] = firecracker_token
+    result = subprocess.run(
+        ["gh", "api", endpoint],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
     if result.returncode != 0:
         return None
     return json.loads(result.stdout)
