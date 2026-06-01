@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-FIRECRACKER_REPO_URL="https://github.com/e2b-dev/firecracker.git"
+FIRECRACKER_REPO_HOST="github.com/e2b-dev/firecracker.git"
+
+: "${FIRECRACKER_REPO_TOKEN:?must be set to clone the firecracker repo}"
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 <commit_hash> <version_name> [arch]" >&2
@@ -26,7 +28,7 @@ case "$arch" in
     ;;
 esac
 
-git clone "$FIRECRACKER_REPO_URL" firecracker
+git clone "https://x-access-token:${FIRECRACKER_REPO_TOKEN}@${FIRECRACKER_REPO_HOST}" firecracker
 cd firecracker
 git checkout "$commit_hash"
 

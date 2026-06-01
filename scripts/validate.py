@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+FIRECRACKER_REPO = "e2b-dev/firecracker"
+
+
 def run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run a command and return the result."""
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
@@ -22,7 +25,19 @@ def run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProce
 
 def gh_api(endpoint: str) -> Optional[dict]:
     """Call the GitHub API using the gh CLI."""
-    result = run_command(["gh", "api", endpoint], check=False)
+    # Route firecracker-repo calls through the App token when present, so
+    # they don't inherit GH_TOKEN, which is scoped to the current repo.
+    env = os.environ.copy()
+    firecracker_token = env.get("FIRECRACKER_GH_TOKEN")
+    if firecracker_token:
+        env["GH_TOKEN"] = firecracker_token
+    result = subprocess.run(
+        ["gh", "api", endpoint],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
     if result.returncode != 0:
         return None
     return json.loads(result.stdout)
@@ -37,7 +52,7 @@ def validate_inputs(tag: Optional[str], commit_hash: Optional[str], build_amd64:
     return None
 
 
-def resolve_tag_to_commit(tag: str, repo: str = "e2b-dev/firecracker") -> tuple[str, Optional[str]]:
+def resolve_tag_to_commit(tag: str, repo: str = FIRECRACKER_REPO) -> tuple[str, Optional[str]]:
     """
     Resolve a tag to its commit hash.
 
@@ -57,7 +72,7 @@ def resolve_tag_to_commit(tag: str, repo: str = "e2b-dev/firecracker") -> tuple[
     return commit_hash, None
 
 
-def validate_commit(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[str, Optional[str]]:
+def validate_commit(commit_hash: str, repo: str = FIRECRACKER_REPO) -> tuple[str, Optional[str]]:
     """
     Validate that a commit exists.
 
@@ -69,7 +84,7 @@ def validate_commit(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tupl
     return data["sha"], None
 
 
-def find_tag_for_commit(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[str, Optional[str]]:
+def find_tag_for_commit(commit_hash: str, repo: str = FIRECRACKER_REPO) -> tuple[str, Optional[str]]:
     """
     Find the most recent tag that is an ancestor of (or equal to) the given commit.
 
@@ -99,7 +114,7 @@ def find_tag_for_commit(commit_hash: str, repo: str = "e2b-dev/firecracker") -> 
 def resolve_tag_and_commit(
     tag: Optional[str],
     input_hash: Optional[str],
-    repo: str = "e2b-dev/firecracker"
+    repo: str = FIRECRACKER_REPO
 ) -> tuple[str, str, Optional[str]]:
     """
     Resolve tag and commit hash.
@@ -187,7 +202,7 @@ def _rollup_status(statuses: list[dict]) -> tuple[str, int]:
     return "unknown", len(statuses)
 
 
-def check_ci_status(commit_hash: str, repo: str = "e2b-dev/firecracker") -> tuple[bool, str]:
+def check_ci_status(commit_hash: str, repo: str = FIRECRACKER_REPO) -> tuple[bool, str]:
     """
     Check CI status for a commit.
 

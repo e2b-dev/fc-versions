@@ -37,6 +37,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Mint firecracker-repo token
+        id: fc_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.FIRECRACKER_APP_ID }}
+          private-key: ${{ secrets.FIRECRACKER_APP_PRIVATE_KEY }}
+          owner: e2b-dev
+          repositories: firecracker
+
       - name: Parse .tool-versions
         uses: wistia/parse-tool-versions@v2.1.1
 
@@ -49,6 +58,7 @@ jobs:
         id: validate
         env:
           GH_TOKEN: ${{ github.token }}
+          FIRECRACKER_GH_TOKEN: ${{ steps.fc_token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python3 scripts/validate.py \
@@ -84,8 +94,20 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Mint firecracker-repo token
+        id: fc_token
+        if: steps.check_release.outputs.skip != 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.FIRECRACKER_APP_ID }}
+          private-key: ${{ secrets.FIRECRACKER_APP_PRIVATE_KEY }}
+          owner: e2b-dev
+          repositories: firecracker
+
       - name: Build Firecracker ${{ needs.validate.outputs.version_name }} (${{ matrix.arch }})
         if: steps.check_release.outputs.skip != 'true'
+        env:
+          FIRECRACKER_REPO_TOKEN: ${{ steps.fc_token.outputs.token }}
         run: ./build.sh "${{ needs.validate.outputs.commit_hash }}" "${{ needs.validate.outputs.version_name }}" "${{ matrix.arch }}"
 
       - name: Upload build artifact
