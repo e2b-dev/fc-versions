@@ -1,3 +1,2 @@
 test:
-    poetry install
-    poetry run pytest scripts/
+    uv run pytest scripts/
