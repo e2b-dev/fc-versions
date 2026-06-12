@@ -499,14 +499,28 @@ class TestCheckArtifactsNeeded:
             assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
 
     def test_both_requested_both_exist(self):
-        """Test returns False when both requested and both exist."""
-        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64", "firecracker-arm64"}):
+        """Test returns False when both requested and both prod + debug exist."""
+        assets = {
+            "firecracker-amd64", "firecracker-arm64",
+            "firecracker-debug-amd64", "firecracker-debug-arm64",
+        }
+        with patch("validate.get_existing_release_assets", return_value=assets):
             assert check_artifacts_needed("v1.0.0_abc1234", True, True) is False
 
+    def test_both_requested_prod_exists_debug_missing(self):
+        """Test returns True when prod binaries exist but the debug ones do not."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64", "firecracker-arm64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, True) is True
+
     def test_amd64_only_exists(self):
-        """Test returns False when only amd64 requested and it exists."""
-        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64"}):
+        """Test returns False when only amd64 requested and its prod + debug exist."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64", "firecracker-debug-amd64"}):
             assert check_artifacts_needed("v1.0.0_abc1234", True, False) is False
+
+    def test_amd64_only_prod_exists_debug_missing(self):
+        """Test returns True when amd64 prod exists but its debug binary does not."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-amd64"}):
+            assert check_artifacts_needed("v1.0.0_abc1234", True, False) is True
 
     def test_amd64_only_missing(self):
         """Test returns True when only amd64 requested and it's missing."""
@@ -514,8 +528,8 @@ class TestCheckArtifactsNeeded:
             assert check_artifacts_needed("v1.0.0_abc1234", True, False) is True
 
     def test_arm64_only_exists(self):
-        """Test returns False when only arm64 requested and it exists."""
-        with patch("validate.get_existing_release_assets", return_value={"firecracker-arm64"}):
+        """Test returns False when only arm64 requested and its prod + debug exist."""
+        with patch("validate.get_existing_release_assets", return_value={"firecracker-arm64", "firecracker-debug-arm64"}):
             assert check_artifacts_needed("v1.0.0_abc1234", False, True) is False
 
     def test_arm64_only_missing(self):
