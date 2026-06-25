@@ -312,16 +312,27 @@ def get_existing_release_assets(version_name: str) -> set[str]:
 
 def check_artifacts_needed(version_name: str, build_amd64: bool, build_arm64: bool) -> bool:
     """
-    Check if any requested architectures are missing from the release.
+    Check if any requested architectures are missing an artifact from the release.
 
-    Returns True if at least one artifact needs to be built and uploaded.
+    Returns True if at least one artifact needs to be built and uploaded. Mirrors
+    the build job's skip-check: a release needs both the prod binary
+    (firecracker-<arch>) and the gdb-enabled debug binary (firecracker-debug-<arch>),
+    so a release that has the prod binary but not the debug one still has new
+    artifacts to publish.
     """
     existing_assets = get_existing_release_assets(version_name)
 
-    if build_amd64 and "firecracker-amd64" not in existing_assets:
-        return True
-    if build_arm64 and "firecracker-arm64" not in existing_assets:
-        return True
+    archs = []
+    if build_amd64:
+        archs.append("amd64")
+    if build_arm64:
+        archs.append("arm64")
+
+    for arch in archs:
+        if f"firecracker-{arch}" not in existing_assets:
+            return True
+        if f"firecracker-debug-{arch}" not in existing_assets:
+            return True
 
     return False
 

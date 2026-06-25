@@ -77,6 +77,15 @@ for asset in "${ASSETS[@]}"; do
   if [[ "$asset" =~ ^firecracker-(amd64|arm64)$ ]]; then
     arch="${BASH_REMATCH[1]}"
     dst="${BUCKET_URI}/${TAG}/${arch}/firecracker"
+  elif [[ "$asset" =~ ^firecracker-debug-(amd64|arm64)\.debug$ ]]; then
+    # Debug-symbols companion (DWARF) for the debug FC binary. Debug-only.
+    arch="${BASH_REMATCH[1]}"
+    dst="${BUCKET_URI}/${TAG}/${arch}/firecracker-debug.debug"
+  elif [[ "$asset" =~ ^firecracker-debug-(amd64|arm64)$ ]]; then
+    # gdb-enabled debug FC binary. Never the prod path ("firecracker"); fetched
+    # explicitly by the dev-node debugging workflow.
+    arch="${BASH_REMATCH[1]}"
+    dst="${BUCKET_URI}/${TAG}/${arch}/firecracker-debug"
   else
     continue
   fi

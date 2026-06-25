@@ -84,13 +84,15 @@ jobs:
         run: |
           version_name="${{ needs.validate.outputs.version_name }}"
           arch="${{ matrix.arch }}"
-          asset_name="firecracker-${arch}"
 
-          if gh release view "$version_name" --json assets -q ".assets[].name" 2>/dev/null | grep -q "^${asset_name}$"; then
-            echo "Release: $arch artifact already exists, skipping build"
+          # Skip only if both the prod and the debug binaries already exist.
+          assets=$(gh release view "$version_name" --json assets -q ".assets[].name" 2>/dev/null || true)
+          if echo "$assets" | grep -q "^firecracker-${arch}$" \
+             && echo "$assets" | grep -q "^firecracker-debug-${arch}$"; then
+            echo "Release: $arch artifacts (prod + debug) already exist, skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Release: $arch artifact missing, will build"
+            echo "Release: $arch artifacts missing, will build"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
@@ -201,6 +203,23 @@ jobs:
                 rm -f "$tmp_file"
               fi
             fi
+
+            # Debug-only artifacts: the gdb-enabled FC binary and its DWARF
+            # companion. Uploaded as firecracker-debug-<arch>[.debug].
+            for dbg in firecracker-debug firecracker-debug.debug; do
+              dbg_path="./builds/$version_name/$arch/$dbg"
+              [[ -f "$dbg_path" ]] || continue
+              dbg_asset="${dbg/firecracker-debug/firecracker-debug-${arch}}"
+              if echo "$existing_assets" | grep -q "^${dbg_asset}$"; then
+                echo "Release: $dbg_asset already exists, skipping"
+              else
+                echo "Release: Uploading $dbg_asset..."
+                tmp_file=$(mktemp -d)/${dbg_asset}
+                cp "$dbg_path" "$tmp_file"
+                gh release upload "$version_name" "$tmp_file"
+                rm -f "$tmp_file"
+              fi
+            done
           done
 
           echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$version_name"
@@ -229,12 +248,20 @@ jobs:
           version_name="${{ needs.validate.outputs.version_name }}"
 
           for arch in amd64 arm64; do
-            asset_name="firecracker-${arch}"
             mkdir -p ./builds/$version_name/$arch
             gh release download "$version_name" \
               --repo "${{ github.repository }}" \
-              --pattern "$asset_name" \
+              --pattern "firecracker-${arch}" \
               --output "./builds/$version_name/$arch/firecracker" 2>/dev/null || true
+            # Debug-only artifacts (gdb binary + DWARF companion).
+            gh release download "$version_name" \
+              --repo "${{ github.repository }}" \
+              --pattern "firecracker-debug-${arch}" \
+              --output "./builds/$version_name/$arch/firecracker-debug" 2>/dev/null || true
+            gh release download "$version_name" \
+              --repo "${{ github.repository }}" \
+              --pattern "firecracker-debug-${arch}.debug" \
+              --output "./builds/$version_name/$arch/firecracker-debug.debug" 2>/dev/null || true
           done
 
       - name: Upload to GCS
@@ -244,15 +271,20 @@ jobs:
           version_name="${{ needs.validate.outputs.version_name }}"
 
           for arch in amd64 arm64; do
-            local_path="./builds/$version_name/$arch/firecracker"
-            [[ -f "$local_path" ]] || continue
+            # Upload the prod binary and the debug-only artifacts. The debug
+            # binary/symbols live at a different name ("firecracker-debug"), so
+            # client nodes — which resolve exactly "firecracker" — never pull them.
+            for name in firecracker firecracker-debug firecracker-debug.debug; do
+              local_path="./builds/$version_name/$arch/$name"
+              [[ -f "$local_path" ]] || continue
 
-            gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/firecracker"
+              gcs_path="gs://${GCP_BUCKET_NAME}/firecrackers/${version_name}/${arch}/${name}"
 
-            if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
-              echo "GCS (${{ matrix.environment }}): $arch already exists, skipping"
-            else
-              echo "GCS (${{ matrix.environment }}): Uploading $arch..."
-              gcloud storage cp "$local_path" "$gcs_path"
-            fi
+              if gcloud storage ls "$gcs_path" >/dev/null 2>&1; then
+                echo "GCS (${{ matrix.environment }}): $name $arch already exists, skipping"
+              else
+                echo "GCS (${{ matrix.environment }}): Uploading $name $arch..."
+                gcloud storage cp "$local_path" "$gcs_path"
+              fi
+            done
           done
