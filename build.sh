@@ -51,8 +51,27 @@ cp "$release_bin" "$out_dir/firecracker"
 # publish the binary plus its companion. The debuglink is repointed to the
 # renamed companion so gdb auto-loads it when the two are colocated.
 echo "Building debug Firecracker $version_name for $arch ($rust_target)..."
-tools/devtool -y build --release -- --bin firecracker --features gdb
+# `tools/devtool build` (via tools/release.sh) compiles with the crate's default
+# features only and silently drops any cargo args after `--`, so `--features gdb`
+# never takes effect. Enable gdb by adding it to the firecracker crate's default
+# features instead. This edits only the throwaway clone (removed below), and the
+# prod binary was already built and copied above, so no backup/restore is needed.
+sed -i '/^\[features\]/a default = ["gdb"]' src/firecracker/Cargo.toml
+tools/devtool -y build --release -- --bin firecracker
 cp "$release_bin" "$out_dir/firecracker-debug"
+
+# Sanity: the debug binary MUST actually contain the gdb feature, otherwise it is
+# useless for guest-kernel debugging and indistinguishable from the prod binary.
+# The `FIRECRACKER_GDB_SOCKET` env-var literal (builder.rs, #[cfg(feature = "gdb")])
+# is present iff the feature was compiled in, and survives stripping.
+# Use grep -c (counts, consumes all input) rather than grep -q: under
+# `set -o pipefail`, grep -q closing the pipe early can SIGPIPE `strings` and make
+# the pipeline report failure even on a match.
+gdb_feature_strings=$(strings "$out_dir/firecracker-debug" | grep -cF FIRECRACKER_GDB_SOCKET || true)
+if [[ "${gdb_feature_strings:-0}" -eq 0 ]]; then
+  echo "Error: firecracker-debug built WITHOUT the gdb feature (no FIRECRACKER_GDB_SOCKET)" >&2
+  exit 1
+fi
 if [[ -f "${release_bin}.debug" ]]; then
   cp "${release_bin}.debug" "$out_dir/firecracker-debug.debug"
   objcopy --remove-section .gnu_debuglink "$out_dir/firecracker-debug" 2>/dev/null || true
