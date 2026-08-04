@@ -317,3 +317,26 @@ jobs:
             --tag "${{ needs.validate.outputs.version_name }}" \
             --bucket "e2b-artifact-binaries/firecrackers" \
             --repo "${{ github.repository }}"
+
+      # TRANSITIONAL dual-publish: also refresh the legacy
+      # e2b-prod-public-builds bucket until every consumer has moved to
+      # e2b-artifact-binaries. Uses the old repo-specific WIF identity
+      # (managed by terraform/ in this repo), which grants the pool's
+      # principalSet objectUser on the bucket directly — no service account.
+      # Remove these two steps (and destroy terraform/) once the transition
+      # is complete. Auth must come after the new-bucket upload: each auth
+      # step overwrites the job's Google credentials.
+      - name: Setup GCS credentials (legacy bucket)
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Upload release to legacy public GCS bucket
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/upload-release-to-gcs.sh \
+            --tag "${{ needs.validate.outputs.version_name }}" \
+            --bucket "e2b-prod-public-builds/firecrackers" \
+            --repo "${{ github.repository }}"
