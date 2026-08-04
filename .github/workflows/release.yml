@@ -288,3 +288,32 @@ jobs:
               fi
             done
           done
+
+  # Publish to the public e2b-artifact-binaries bucket (e2b-artifacts
+  # project), which anonymous consumers fetch from — the replacement for the
+  # old manual upload to e2b-prod-public-builds. Uses the shared github-worker
+  # publish identity (same pattern as belt/infra publish.yml), wired via the
+  # E2B_ARTIFACTS_* repo variables and allowlisted in the terragrunt repo
+  # (gcp/e2b-artifacts/_global/iam/github-worker). The SA is
+  # storage.objectCreator-only, so published objects are immutable; the upload
+  # script skips objects that already exist, making re-runs safe.
+  deploy-public:
+    needs: [validate, publish]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup GCS credentials
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.E2B_ARTIFACTS_WIF_PROVIDER }}
+          service_account: ${{ vars.E2B_ARTIFACTS_PUBLISH_SA }}
+
+      - name: Upload release to public GCS bucket
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/upload-release-to-gcs.sh \
+            --tag "${{ needs.validate.outputs.version_name }}" \
+            --bucket "e2b-artifact-binaries/firecrackers" \
+            --repo "${{ github.repository }}"
