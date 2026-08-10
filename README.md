@@ -1,4 +1,8 @@
-# fc-versions
+# fc-versions (archived)
+
+| :warning: WARNING                                                                                                                                                    |
+|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| This repository is archived. Firecracker versions contributions are moved to the [e2b-dev/infra repository](https://github.com/e2b-dev/infra/tree/main/firecracker). |
 
 ## Overview
 
